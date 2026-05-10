@@ -1,34 +1,68 @@
-import { StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { useState } from "react";
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
 
 export default function ChatInputBar({
   inputText,
   onChangeText,
   onSend,
-  onPickImage,
   isRecording,
   onToggleRecord,
 }) {
+  const [voiceMode, setVoiceMode] = useState(false);
+
+  const handlePressIn = () => {
+    if (!isRecording) {
+      onToggleRecord?.();
+    }
+  };
+
+  const handlePressOut = () => {
+    if (isRecording) {
+      onToggleRecord?.();
+    }
+  };
+
   return (
     <View style={styles.inputArea}>
-      <TextInput
-        value={inputText}
-        onChangeText={onChangeText}
-        style={styles.chatInput}
-        placeholder="输入消息..."
-        multiline
-      />
-
-      <View style={styles.actionRow}>
-        <TouchableOpacity style={styles.actionButton} onPress={onPickImage}>
-          <Text style={styles.actionText}>图片</Text>
-        </TouchableOpacity>
-
+      <View style={styles.row}>
         <TouchableOpacity
-          style={[styles.actionButton, isRecording && styles.recordingButton]}
-          onPress={onToggleRecord}
+          style={styles.modeButton}
+          onPress={() => setVoiceMode((prev) => !prev)}
         >
-          <Text style={styles.actionText}>{isRecording ? "停止" : "语音"}</Text>
+          <Text style={styles.modeIcon}>{voiceMode ? "⌨️" : "🎤"}</Text>
         </TouchableOpacity>
+
+        <View style={styles.centerArea}>
+          {voiceMode ? (
+            <Pressable
+              onPressIn={handlePressIn}
+              onPressOut={handlePressOut}
+              style={({ pressed }) => [
+                styles.holdToTalkButton,
+                (pressed || isRecording) && styles.holdToTalkButtonActive,
+              ]}
+            >
+              <Text style={styles.holdToTalkText}>
+                {isRecording ? "松开发送" : "按住说话"}
+              </Text>
+            </Pressable>
+          ) : (
+            <TextInput
+              value={inputText}
+              onChangeText={onChangeText}
+              style={styles.chatInput}
+              placeholder="输入消息..."
+              multiline
+            />
+          )}
+        </View>
 
         <TouchableOpacity style={styles.sendButton} onPress={onSend}>
           <Text style={styles.sendButtonText}>发送</Text>
@@ -46,8 +80,27 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "#ececec",
   },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  modeButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#f3f4f6",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modeIcon: {
+    fontSize: 18,
+  },
+  centerArea: {
+    flex: 1,
+    marginHorizontal: 8,
+  },
   chatInput: {
-    minHeight: 42,
+    minHeight: 40,
     maxHeight: 96,
     borderWidth: 1,
     borderColor: "#ddd",
@@ -56,26 +109,25 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     backgroundColor: "#fafafa",
   },
-  actionRow: {
-    marginTop: 8,
-    flexDirection: "row",
-    gap: 8,
+  holdToTalkButton: {
+    minHeight: 40,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#ddd",
+    backgroundColor: "#f7f7f7",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
   },
-  actionButton: {
-    backgroundColor: "#f3f4f6",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 10,
+  holdToTalkButtonActive: {
+    backgroundColor: "#e6e6e6",
+    borderColor: "#cfcfcf",
   },
-  recordingButton: {
-    backgroundColor: "#ffd7d7",
-  },
-  actionText: {
+  holdToTalkText: {
     color: "#333",
     fontWeight: "600",
   },
   sendButton: {
-    marginLeft: "auto",
     backgroundColor: "#07c160",
     paddingHorizontal: 16,
     paddingVertical: 10,

@@ -1,9 +1,12 @@
 import { StatusBar } from "expo-status-bar";
+import { useEffect, useState } from "react";
 import {
   Alert,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
+  StatusBar as RNStatusBar,
   SafeAreaView,
   StyleSheet,
   Text,
@@ -15,6 +18,32 @@ import MessageBubble from "../components/chat/MessageBubble";
 import { useChat } from "../hooks/useChat";
 
 export default function ChatScreen({ currentUser, onLogout }) {
+  const PageContainer = Platform.OS === "ios" ? KeyboardAvoidingView : View;
+  const pageContainerProps =
+    Platform.OS === "ios"
+      ? { behavior: "padding", keyboardVerticalOffset: 0 }
+      : {};
+  const [androidKeyboardHeight, setAndroidKeyboardHeight] = useState(0);
+
+  useEffect(() => {
+    if (Platform.OS !== "android") {
+      return;
+    }
+
+    const showSub = Keyboard.addListener("keyboardDidShow", (event) => {
+      setAndroidKeyboardHeight(event.endCoordinates?.height ?? 0);
+    });
+
+    const hideSub = Keyboard.addListener("keyboardDidHide", () => {
+      setAndroidKeyboardHeight(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
   const {
     messages,
     inputText,
@@ -68,11 +97,7 @@ export default function ChatScreen({ currentUser, onLogout }) {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <KeyboardAvoidingView
-        style={styles.page}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 24}
-      >
+      <PageContainer style={styles.page} {...pageContainerProps}>
         <View style={styles.header}>
           <Text style={styles.headerTitle}>与小微聊天中</Text>
           <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
@@ -101,16 +126,33 @@ export default function ChatScreen({ currentUser, onLogout }) {
           }}
         />
 
-        <ChatInputBar
-          inputText={inputText}
-          onChangeText={setInputText}
-          onSend={sendText}
-          onPickImage={handlePickImage}
-          isRecording={isRecording}
-          onToggleRecord={handleToggleRecord}
-        />
-      </KeyboardAvoidingView>
-      <StatusBar style="dark" />
+        <View
+          style={[
+            styles.composerArea,
+            Platform.OS === "android" && {
+              marginBottom: androidKeyboardHeight,
+            },
+          ]}
+        >
+          <ChatInputBar
+            inputText={inputText}
+            onChangeText={setInputText}
+            onSend={sendText}
+            isRecording={isRecording}
+            onToggleRecord={handleToggleRecord}
+          />
+
+          <View style={styles.mediaRow}>
+            <TouchableOpacity
+              style={styles.imagePickButton}
+              onPress={handlePickImage}
+            >
+              <Text style={styles.imagePickButtonText}>图片</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </PageContainer>
+      <StatusBar style="dark" translucent={false} backgroundColor="#f2f4f8" />
     </SafeAreaView>
   );
 }
@@ -118,10 +160,12 @@ export default function ChatScreen({ currentUser, onLogout }) {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#f2f4f8",
+    backgroundColor: "#fff",
+    paddingTop: Platform.OS === "android" ? RNStatusBar.currentHeight || 0 : 0,
   },
   page: {
     flex: 1,
+    backgroundColor: "#f2f4f8",
   },
   header: {
     paddingHorizontal: 16,
@@ -150,5 +194,26 @@ const styles = StyleSheet.create({
     padding: 12,
     paddingBottom: 16,
     gap: 10,
+  },
+  composerArea: {
+    backgroundColor: "#fff",
+    borderTopWidth: 1,
+    borderTopColor: "#ececec",
+    paddingBottom: Platform.OS === "ios" ? 6 : 0,
+  },
+  mediaRow: {
+    paddingHorizontal: 12,
+    paddingBottom: 10,
+  },
+  imagePickButton: {
+    alignSelf: "flex-start",
+    backgroundColor: "#f3f4f6",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  imagePickButtonText: {
+    color: "#333",
+    fontWeight: "600",
   },
 });
