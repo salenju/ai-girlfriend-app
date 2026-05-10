@@ -1,4 +1,14 @@
-import { Image, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import * as MediaLibrary from "expo-media-library";
+import { useState } from "react";
+import {
+  Alert,
+  Image,
+  Modal,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 
 const AUDIO_MIN_WIDTH = 90;
 const AUDIO_MAX_WIDTH = 220;
@@ -17,10 +27,42 @@ export default function MessageBubble({
   isPlaying,
   onPlayAudio,
 }) {
+  const [previewVisible, setPreviewVisible] = useState(false);
+  const [savingImage, setSavingImage] = useState(false);
+
   const durationSec = Math.max(1, Math.ceil((item.durationMillis || 0) / 1000));
   const audioWidth = getAudioBubbleWidth(item.durationMillis || 0);
 
   const waveBars = [6, 10, 14];
+
+  const handleSaveImage = async () => {
+    if (!item?.imageUri) {
+      return;
+    }
+
+    try {
+      setSavingImage(true);
+
+      const permission = await MediaLibrary.requestPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert("权限不足", "请允许访问相册后再保存图片");
+        return;
+      }
+
+      const asset = await MediaLibrary.createAssetAsync(item.imageUri);
+      try {
+        await MediaLibrary.createAlbumAsync("AIChat", asset, false);
+      } catch {
+        // 相册已存在时忽略
+      }
+
+      Alert.alert("保存成功", "图片已保存到系统相册");
+    } catch (error) {
+      Alert.alert("保存失败", error?.message ?? "图片保存失败，请稍后重试");
+    } finally {
+      setSavingImage(false);
+    }
+  };
 
   return (
     <View style={[styles.messageRow, isMine ? styles.myRow : styles.botRow]}>
@@ -36,7 +78,50 @@ export default function MessageBubble({
         )}
 
         {item.type === "image" && (
-          <Image source={{ uri: item.imageUri }} style={styles.messageImage} />
+          <>
+            <TouchableOpacity
+              activeOpacity={0.9}
+              onPress={() => setPreviewVisible(true)}
+            >
+              <Image
+                source={{ uri: item.imageUri }}
+                style={styles.messageImage}
+              />
+            </TouchableOpacity>
+
+            <Modal
+              animationType="fade"
+              transparent
+              visible={previewVisible}
+              onRequestClose={() => setPreviewVisible(false)}
+            >
+              <View style={styles.previewMask}>
+                <TouchableOpacity
+                  style={styles.previewCloseArea}
+                  activeOpacity={1}
+                  onPress={() => setPreviewVisible(false)}
+                >
+                  <Image
+                    source={{ uri: item.imageUri }}
+                    style={styles.previewImage}
+                    resizeMode="contain"
+                  />
+                </TouchableOpacity>
+
+                <View style={styles.previewActions}>
+                  <TouchableOpacity
+                    style={styles.previewActionButton}
+                    onPress={handleSaveImage}
+                    disabled={savingImage}
+                  >
+                    <Text style={styles.previewActionText}>
+                      {savingImage ? "保存中..." : "保存到相册"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </Modal>
+          </>
         )}
 
         {item.type === "audio" && (
@@ -129,6 +214,39 @@ const styles = StyleSheet.create({
     height: 180,
     borderRadius: 10,
     backgroundColor: "#eee",
+  },
+  previewMask: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.92)",
+    justifyContent: "space-between",
+  },
+  previewCloseArea: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingTop: 30,
+  },
+  previewImage: {
+    width: "100%",
+    height: "100%",
+  },
+  previewActions: {
+    paddingHorizontal: 16,
+    paddingBottom: 28,
+    alignItems: "center",
+  },
+  previewActionButton: {
+    minWidth: 150,
+    backgroundColor: "#07c160",
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 999,
+    alignItems: "center",
+  },
+  previewActionText: {
+    color: "#fff",
+    fontWeight: "700",
   },
   audioCard: {
     minHeight: 38,
