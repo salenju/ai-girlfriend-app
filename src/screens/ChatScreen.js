@@ -1,3 +1,4 @@
+import { StatusBar } from "expo-status-bar";
 import {
   Alert,
   FlatList,
@@ -9,10 +10,9 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { StatusBar } from "expo-status-bar";
-import { useChat } from "../hooks/useChat";
 import ChatInputBar from "../components/chat/ChatInputBar";
 import MessageBubble from "../components/chat/MessageBubble";
+import { useChat } from "../hooks/useChat";
 
 export default function ChatScreen({ currentUser, onLogout }) {
   const {
@@ -42,7 +42,9 @@ export default function ChatScreen({ currentUser, onLogout }) {
 
   const handleToggleRecord = async () => {
     try {
-      const result = isRecording ? await stopRecording() : await startRecording();
+      const result = isRecording
+        ? await stopRecording()
+        : await startRecording();
       if (result?.ok === false) {
         Alert.alert("提示", result.message || "录音失败");
       }
@@ -68,7 +70,8 @@ export default function ChatScreen({ currentUser, onLogout }) {
     <SafeAreaView style={styles.safeArea}>
       <KeyboardAvoidingView
         style={styles.page}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 24}
       >
         <View style={styles.header}>
           <Text style={styles.headerTitle}>与小微聊天中</Text>
@@ -81,6 +84,10 @@ export default function ChatScreen({ currentUser, onLogout }) {
           data={messages}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={
+            Platform.OS === "ios" ? "interactive" : "on-drag"
+          }
           renderItem={({ item }) => {
             const isMine = item.senderId === currentUser?.id;
             return (
@@ -141,6 +148,7 @@ const styles = StyleSheet.create({
   },
   listContent: {
     padding: 12,
+    paddingBottom: 16,
     gap: 10,
   },
 });
