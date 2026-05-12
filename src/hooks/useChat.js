@@ -2,7 +2,7 @@ import { Audio } from "expo-av";
 import * as ImagePicker from "expo-image-picker";
 import { useEffect, useRef, useState } from "react";
 import {
-  enqueueTextMessage,
+  enqueueLocalMessage,
   flushOutboxQueue,
   initLocalChatStorage,
   listMessagesByConversation,
@@ -45,6 +45,7 @@ function parseMediaPayload(text) {
   try {
     const raw = text.slice(MEDIA_PAYLOAD_PREFIX.length);
     const parsed = JSON.parse(raw);
+
     if (parsed?.type === "image" && parsed?.imageUri) {
       return {
         type: "image",
@@ -56,6 +57,14 @@ function parseMediaPayload(text) {
       return {
         type: "audio",
         audioUri: parsed.audioUri,
+        durationMillis: Number(parsed.durationMillis || 0),
+      };
+    }
+
+    if (parsed?.type === "video" && parsed?.videoUri) {
+      return {
+        type: "video",
+        videoUri: parsed.videoUri,
         durationMillis: Number(parsed.durationMillis || 0),
       };
     }
@@ -92,6 +101,15 @@ function mapStoredRowToUi(row) {
     };
   }
 
+  if (media?.type === "video") {
+    return {
+      ...base,
+      type: "video",
+      videoUri: media.videoUri,
+      durationMillis: media.durationMillis,
+    };
+  }
+
   return {
     ...base,
     type: "text",
@@ -117,7 +135,7 @@ async function delay(ms) {
 async function sendTaskMock(task) {
   await delay(150);
   const text = task?.payload?.text || "";
-  if (text.includes("#fail")) {
+  if (typeof text === "string" && text.includes("#fail")) {
     throw new Error("模拟发送失败：命中 #fail 标记");
   }
 
@@ -238,10 +256,12 @@ export function useChat(currentUser) {
     setInputText("");
 
     try {
-      await enqueueTextMessage({
+      await enqueueLocalMessage({
         conversationId: conversationIdRef.current,
         senderId: currentUser.id,
         text: draft,
+        messageType: "text",
+        previewText: draft,
         unreadDelta: 0,
       });
 
@@ -278,13 +298,15 @@ export function useChat(currentUser) {
     }
 
     try {
-      await enqueueTextMessage({
+      await enqueueLocalMessage({
         conversationId: conversationIdRef.current,
         senderId: currentUser.id,
         text: serializeMediaPayload({
           type: "image",
           imageUri: asset.uri,
         }),
+        messageType: "image",
+        previewText: "[图片]",
         unreadDelta: 0,
       });
 
@@ -293,6 +315,53 @@ export function useChat(currentUser) {
       return { ok: true };
     } catch {
       return { ok: false, message: "图片发送失败，请稍后重试" };
+    }
+  };
+
+  const pickVideo = async () => {
+    if (!currentUser || !conversationIdRef.current) {
+      return { ok: false, message: "请先登录" };
+    }
+
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      return { ok: false, message: "请允许访问相册后再发送视频" };
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+      quality: 0.8,
+      allowsEditing: false,
+    });
+
+    if (result.canceled) {
+      return { ok: true, canceled: true };
+    }
+
+    const asset = result.assets?.[0];
+    if (!asset?.uri) {
+      return { ok: false, message: "未读取到视频" };
+    }
+
+    try {
+      await enqueueLocalMessage({
+        conversationId: conversationIdRef.current,
+        senderId: currentUser.id,
+        text: serializeMediaPayload({
+          type: "video",
+          videoUri: asset.uri,
+          durationMillis: Number(asset.duration || 0),
+        }),
+        messageType: "video",
+        previewText: "[视频]",
+        unreadDelta: 0,
+      });
+
+      await syncMessagesFromStorage();
+      await flushOutboxOnce();
+      return { ok: true };
+    } catch {
+      return { ok: false, message: "视频发送失败，请稍后重试" };
     }
   };
 
@@ -339,7 +408,7 @@ export function useChat(currentUser) {
 
     if (uri) {
       try {
-        await enqueueTextMessage({
+        await enqueueLocalMessage({
           conversationId: conversationIdRef.current,
           senderId: currentUser.id,
           text: serializeMediaPayload({
@@ -347,6 +416,8 @@ export function useChat(currentUser) {
             audioUri: uri,
             durationMillis: status.durationMillis ?? 0,
           }),
+          messageType: "audio",
+          previewText: "[语音]",
           unreadDelta: 0,
         });
 
@@ -431,6 +502,7 @@ export function useChat(currentUser) {
     playingMessageId,
     sendText,
     pickImage,
+    pickVideo,
     startRecording,
     stopRecording,
     togglePlayAudio,

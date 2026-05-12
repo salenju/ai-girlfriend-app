@@ -52,6 +52,7 @@ export default function ChatScreen({ currentUser, onLogout }) {
     playingMessageId,
     sendText,
     pickImage,
+    pickVideo,
     startRecording,
     stopRecording,
     togglePlayAudio,
@@ -66,6 +67,17 @@ export default function ChatScreen({ currentUser, onLogout }) {
       }
     } catch (error) {
       Alert.alert("图片发送失败", error?.message ?? "请稍后重试");
+    }
+  };
+
+  const handlePickVideo = async () => {
+    try {
+      const result = await pickVideo();
+      if (result?.ok === false) {
+        Alert.alert("提示", result.message || "发送视频失败");
+      }
+    } catch (error) {
+      Alert.alert("视频发送失败", error?.message ?? "请稍后重试");
     }
   };
 
@@ -144,10 +156,17 @@ export default function ChatScreen({ currentUser, onLogout }) {
 
           <View style={styles.mediaRow}>
             <TouchableOpacity
-              style={styles.imagePickButton}
+              style={styles.mediaButton}
               onPress={handlePickImage}
             >
-              <Text style={styles.imagePickButtonText}>图片</Text>
+              <Text style={styles.mediaButtonText}>图片</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.mediaButton}
+              onPress={handlePickVideo}
+            >
+              <Text style={styles.mediaButtonText}>视频</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -204,15 +223,17 @@ const styles = StyleSheet.create({
   mediaRow: {
     paddingHorizontal: 12,
     paddingBottom: 10,
+    flexDirection: "row",
+    gap: 8,
   },
-  imagePickButton: {
+  mediaButton: {
     alignSelf: "flex-start",
     backgroundColor: "#f3f4f6",
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 10,
   },
-  imagePickButtonText: {
+  mediaButtonText: {
     color: "#333",
     fontWeight: "600",
   },

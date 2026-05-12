@@ -178,7 +178,10 @@ function normalizeOutbox(row) {
 }
 
 function computeRetryAt(retryCount, baseDelayMs, maxDelayMs) {
-  const delay = Math.min(baseDelayMs * 2 ** Math.max(0, retryCount), maxDelayMs);
+  const delay = Math.min(
+    baseDelayMs * 2 ** Math.max(0, retryCount),
+    maxDelayMs,
+  );
   return new Date(Date.now() + delay).toISOString();
 }
 
@@ -203,7 +206,7 @@ export async function recoverStuckSendingTasks() {
       $failed: OUTBOX_STATUS.FAILED,
       $sending: OUTBOX_STATUS.SENDING,
       $now: now,
-    }
+    },
   );
 }
 
@@ -249,7 +252,7 @@ export async function upsertConversationSummary({
       $at: at,
       $unreadDelta: Number(unreadDelta || 0),
       $resetUnread: resetUnread ? 1 : 0,
-    }
+    },
   );
 }
 
@@ -263,7 +266,7 @@ export async function listConversations({ limit = 50, offset = 0 } = {}) {
     {
       $limit: Number(limit),
       $offset: Number(offset),
-    }
+    },
   );
   return rows.map(normalizeConversation);
 }
@@ -273,14 +276,14 @@ export async function getConversationById(conversationId) {
   const db = await getDb();
   const row = await db.getFirstAsync(
     `SELECT * FROM conversations WHERE id = $id LIMIT 1`,
-    { $id: conversationId }
+    { $id: conversationId },
   );
   return normalizeConversation(row);
 }
 
 export async function listMessagesByConversation(
   conversationId,
-  { limit = 50, before = null } = {}
+  { limit = 50, before = null } = {},
 ) {
   if (!conversationId) throw new Error("conversationId is required");
   await initLocalChatStorage();
@@ -324,18 +327,21 @@ export async function setConversationRead(conversationId, at = nowIso()) {
     {
       $id: conversationId,
       $at: at,
-    }
+    },
   );
 }
 
-export async function enqueueTextMessage({
+export async function enqueueLocalMessage({
   conversationId,
   senderId,
   text,
+  messageType = "text",
+  previewText = null,
   clientId = genClientId("msg"),
   createdAtClient = nowIso(),
   maxRetries = RETRY_DEFAULTS.maxRetries,
   unreadDelta = 0,
+  meta = {},
 }) {
   if (!conversationId) throw new Error("conversationId is required");
   if (!senderId) throw new Error("senderId is required");
@@ -344,12 +350,13 @@ export async function enqueueTextMessage({
   await initLocalChatStorage();
 
   const payload = {
-    type: "text",
+    type: messageType,
     conversationId,
     clientId,
     senderId,
     text: text.trim(),
     createdAtClient,
+    meta,
   };
 
   await runInTx(async (db) => {
@@ -357,9 +364,10 @@ export async function enqueueTextMessage({
       `INSERT INTO messages (
         conversation_id, client_id, sender_id, type, text, status, created_at_client, meta_json
       ) VALUES (
-        $conversationId, $clientId, $senderId, 'text', $text, $status, $createdAtClient, $metaJson
+        $conversationId, $clientId, $senderId, $type, $text, $status, $createdAtClient, $metaJson
       )
       ON CONFLICT(conversation_id, client_id) DO UPDATE SET
+        type = excluded.type,
         text = excluded.text,
         status = excluded.status,
         error_message = NULL,
@@ -368,11 +376,12 @@ export async function enqueueTextMessage({
         $conversationId: conversationId,
         $clientId: clientId,
         $senderId: senderId,
+        $type: messageType,
         $text: payload.text,
         $status: MESSAGE_STATUS.PENDING,
         $createdAtClient: createdAtClient,
-        $metaJson: JSON.stringify({ localOnly: true }),
-      }
+        $metaJson: JSON.stringify({ localOnly: true, ...meta }),
+      },
     );
 
     const now = nowIso();
@@ -398,15 +407,25 @@ export async function enqueueTextMessage({
         $pending: OUTBOX_STATUS.PENDING,
         $maxRetries: Number(maxRetries || RETRY_DEFAULTS.maxRetries),
         $now: now,
-      }
+      },
     );
+
+    const summaryText =
+      previewText ??
+      (messageType === "image"
+        ? "[图片]"
+        : messageType === "audio"
+          ? "[语音]"
+          : messageType === "video"
+            ? "[视频]"
+            : payload.text);
 
     await db.runAsync(
       `INSERT INTO conversations (
         id, last_message_text, last_message_type, last_message_sender_id,
         unread_count, updated_at, created_at
       ) VALUES (
-        $id, $lastMessageText, 'text', $lastMessageSenderId,
+        $id, $lastMessageText, $lastMessageType, $lastMessageSenderId,
         $unreadCount, $updatedAt, $updatedAt
       )
       ON CONFLICT(id) DO UPDATE SET
@@ -417,22 +436,42 @@ export async function enqueueTextMessage({
         updated_at = excluded.updated_at`,
       {
         $id: conversationId,
-        $lastMessageText: payload.text,
+        $lastMessageText: summaryText,
+        $lastMessageType: messageType,
         $lastMessageSenderId: senderId,
         $unreadCount: clampUnread(unreadDelta),
         $unreadDelta: Number(unreadDelta || 0),
         $updatedAt: createdAtClient,
-      }
+      },
     );
   });
 
   return payload;
 }
 
-export async function claimSendableOutbox({
-  limit = 20,
-  now = nowIso(),
-} = {}) {
+export async function enqueueTextMessage({
+  conversationId,
+  senderId,
+  text,
+  clientId,
+  createdAtClient,
+  maxRetries,
+  unreadDelta = 0,
+}) {
+  return enqueueLocalMessage({
+    conversationId,
+    senderId,
+    text,
+    messageType: "text",
+    previewText: text,
+    clientId,
+    createdAtClient,
+    maxRetries,
+    unreadDelta,
+  });
+}
+
+export async function claimSendableOutbox({ limit = 20, now = nowIso() } = {}) {
   await initLocalChatStorage();
   const db = await getDb();
 
@@ -448,7 +487,7 @@ export async function claimSendableOutbox({
       $failed: OUTBOX_STATUS.FAILED,
       $now: now,
       $limit: Number(limit),
-    }
+    },
   );
 
   if (!candidates.length) return [];
@@ -468,7 +507,7 @@ export async function claimSendableOutbox({
         $pending: OUTBOX_STATUS.PENDING,
         $failed: OUTBOX_STATUS.FAILED,
         $now: now,
-      }
+      },
     );
 
     const row = await db.getFirstAsync(
@@ -476,7 +515,7 @@ export async function claimSendableOutbox({
       {
         $id: item.id,
         $sending: OUTBOX_STATUS.SENDING,
-      }
+      },
     );
 
     if (row) locked.push(normalizeOutbox(row));
@@ -512,7 +551,7 @@ export async function markOutboxSent({
           $id: outboxId,
           $sent: OUTBOX_STATUS.SENT,
           $now: now,
-        }
+        },
       );
     } else {
       await db.runAsync(
@@ -528,7 +567,7 @@ export async function markOutboxSent({
           $clientId: clientId,
           $sent: OUTBOX_STATUS.SENT,
           $now: now,
-        }
+        },
       );
     }
 
@@ -546,7 +585,7 @@ export async function markOutboxSent({
         $sent: MESSAGE_STATUS.SENT,
         $serverId: serverId,
         $createdAtServer: createdAtServer,
-      }
+      },
     );
   });
 }
@@ -567,9 +606,12 @@ export async function markOutboxFailed({
   const db = await getDb();
 
   const row = outboxId
-    ? await db.getFirstAsync(`SELECT * FROM outbox_queue WHERE id = $id LIMIT 1`, {
-        $id: outboxId,
-      })
+    ? await db.getFirstAsync(
+        `SELECT * FROM outbox_queue WHERE id = $id LIMIT 1`,
+        {
+          $id: outboxId,
+        },
+      )
     : await db.getFirstAsync(
         `SELECT *
          FROM outbox_queue
@@ -579,7 +621,7 @@ export async function markOutboxFailed({
         {
           $conversationId: conversationId,
           $clientId: clientId,
-        }
+        },
       );
 
   if (!row) return;
@@ -606,7 +648,7 @@ export async function markOutboxFailed({
         $nextRetryAt: nextRetryAt,
         $now: now,
         $lastError: message,
-      }
+      },
     );
 
     await txDb.runAsync(
@@ -620,7 +662,7 @@ export async function markOutboxFailed({
         $clientId: row.client_id,
         $failed: MESSAGE_STATUS.FAILED,
         $errorMessage: message,
-      }
+      },
     );
   });
 }
@@ -649,7 +691,11 @@ export async function flushOutboxQueue({
         createdAtServer: sendResult?.createdAtServer ?? null,
       });
 
-      const success = { outboxId: task.id, ok: true, result: sendResult ?? null };
+      const success = {
+        outboxId: task.id,
+        ok: true,
+        result: sendResult ?? null,
+      };
       results.push(success);
       if (onProgress) onProgress(success, task);
     } catch (error) {
@@ -680,15 +726,17 @@ export async function flushOutboxQueue({
 }
 
 export async function getOutboxState({
-  statuses = [OUTBOX_STATUS.PENDING, OUTBOX_STATUS.SENDING, OUTBOX_STATUS.FAILED],
+  statuses = [
+    OUTBOX_STATUS.PENDING,
+    OUTBOX_STATUS.SENDING,
+    OUTBOX_STATUS.FAILED,
+  ],
   limit = 100,
 } = {}) {
   await initLocalChatStorage();
   const db = await getDb();
 
-  const placeholders = statuses
-    .map((_, index) => `$status${index}`)
-    .join(", ");
+  const placeholders = statuses.map((_, index) => `$status${index}`).join(", ");
 
   const params = { $limit: Number(limit) };
   statuses.forEach((status, index) => {
@@ -700,7 +748,7 @@ export async function getOutboxState({
      WHERE status IN (${placeholders})
      ORDER BY created_at ASC
      LIMIT $limit`,
-    params
+    params,
   );
 
   return rows.map(normalizeOutbox);

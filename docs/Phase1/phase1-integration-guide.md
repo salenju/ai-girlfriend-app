@@ -39,7 +39,7 @@ pnpm add expo-sqlite
 
 把当前 `pushMessage(...)` 直接写内存改为：
 
-1. 调用 `enqueueTextMessage({ conversationId, senderId, text, unreadDelta: 0 })`
+1. 调用 `enqueueLocalMessage({ conversationId, senderId, text, messageType: "text", previewText: text, unreadDelta: 0 })`
 2. 再调用 `listMessagesByConversation` 刷新当前会话消息
 3. 清空输入框
 
