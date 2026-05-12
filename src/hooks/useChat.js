@@ -1,51 +1,199 @@
-import { useRef, useState } from "react";
-import * as ImagePicker from "expo-image-picker";
 import { Audio } from "expo-av";
+import * as ImagePicker from "expo-image-picker";
+import { useEffect, useRef, useState } from "react";
+import {
+  enqueueTextMessage,
+  flushOutboxQueue,
+  initLocalChatStorage,
+  listMessagesByConversation,
+} from "../services/chat/localChatStorage";
 
 export const BOT_USER = {
   id: "bot-1",
   username: "小微",
 };
 
+const OUTBOX_POLL_INTERVAL_MS = 2500;
+const TEXT_PAGE_SIZE = 200;
+
 function createId(prefix = "msg") {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
 }
 
+function buildConversationId(userId) {
+  return `direct-${userId}-${BOT_USER.id}`;
+}
+
+function sortByCreatedAt(list) {
+  return [...list].sort((a, b) => {
+    const left = new Date(a.createdAt || 0).getTime();
+    const right = new Date(b.createdAt || 0).getTime();
+    return left - right;
+  });
+}
+
+function mapStoredTextToUi(row) {
+  return {
+    id: row.clientId || String(row.id),
+    type: "text",
+    text: row.text || "",
+    senderId: row.senderId,
+    createdAt: row.createdAtServer || row.createdAtClient,
+    status: row.status,
+  };
+}
+
+function createBotWelcomeMessage(username) {
+  return {
+    id: createId("welcome"),
+    type: "text",
+    text: `欢迎你，${username}！现在可以开始聊天了。`,
+    senderId: BOT_USER.id,
+    createdAt: new Date().toISOString(),
+    __volatile: true,
+  };
+}
+
+async function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function sendTaskMock(task) {
+  await delay(150);
+  const text = task?.payload?.text || "";
+  if (text.includes("#fail")) {
+    throw new Error("模拟发送失败：命中 #fail 标记");
+  }
+
+  return {
+    serverId: `server-${task.clientId}`,
+    createdAtServer: new Date().toISOString(),
+  };
+}
+
 export function useChat(currentUser) {
-  const [messages, setMessages] = useState([
-    {
-      id: createId(),
-      type: "text",
-      text: "你好呀～我是小微，今天想聊点什么？",
-      senderId: BOT_USER.id,
-      createdAt: new Date().toISOString(),
-    },
-  ]);
+  const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState("");
   const [recording, setRecording] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [playingMessageId, setPlayingMessageId] = useState(null);
+
   const soundRef = useRef(null);
+  const flushTimerRef = useRef(null);
+  const isFlushingRef = useRef(false);
+  const conversationIdRef = useRef(null);
 
   const pushMessage = (message) => {
-    setMessages((prev) => [...prev, message]);
+    setMessages((prev) => sortByCreatedAt([...prev, message]));
   };
 
-  const sendText = () => {
-    const text = inputText.trim();
-    if (!text || !currentUser) {
+  const syncTextMessagesFromStorage = async () => {
+    const conversationId = conversationIdRef.current;
+    if (!conversationId) {
+      return 0;
+    }
+
+    const stored = await listMessagesByConversation(conversationId, {
+      limit: TEXT_PAGE_SIZE,
+    });
+    const textMessages = stored.map(mapStoredTextToUi);
+
+    setMessages((prev) => {
+      const volatileMessages = prev.filter((item) => item.__volatile === true);
+      return sortByCreatedAt([...textMessages, ...volatileMessages]);
+    });
+
+    return textMessages.length;
+  };
+
+  const flushOutboxOnce = async () => {
+    if (isFlushingRef.current || !conversationIdRef.current) {
       return;
     }
 
-    pushMessage({
-      id: createId(),
-      type: "text",
-      text,
-      senderId: currentUser.id,
-      createdAt: new Date().toISOString(),
+    isFlushingRef.current = true;
+    try {
+      const summary = await flushOutboxQueue({
+        sendTask: sendTaskMock,
+        batchSize: 20,
+      });
+
+      if (summary.processed > 0) {
+        await syncTextMessagesFromStorage();
+      }
+    } finally {
+      isFlushingRef.current = false;
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const setupLocalChat = async () => {
+      if (!currentUser?.id) {
+        conversationIdRef.current = null;
+        setMessages([]);
+        return;
+      }
+
+      conversationIdRef.current = buildConversationId(currentUser.id);
+      await initLocalChatStorage();
+      if (cancelled) return;
+
+      const textCount = await syncTextMessagesFromStorage();
+      if (cancelled) return;
+
+      if (textCount === 0) {
+        setMessages([
+          createBotWelcomeMessage(currentUser.username || currentUser.id),
+        ]);
+      }
+
+      await flushOutboxOnce();
+      if (cancelled) return;
+
+      flushTimerRef.current = setInterval(() => {
+        flushOutboxOnce().catch(() => {
+          // ignore interval flush errors
+        });
+      }, OUTBOX_POLL_INTERVAL_MS);
+    };
+
+    setupLocalChat().catch(() => {
+      // keep UI usable even if local storage fails
     });
 
+    return () => {
+      cancelled = true;
+      if (flushTimerRef.current) {
+        clearInterval(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
+    };
+  }, [currentUser?.id]);
+
+  const sendText = async () => {
+    const text = inputText.trim();
+    if (!text || !currentUser || !conversationIdRef.current) {
+      return;
+    }
+
+    const draft = text;
     setInputText("");
+
+    try {
+      await enqueueTextMessage({
+        conversationId: conversationIdRef.current,
+        senderId: currentUser.id,
+        text: draft,
+        unreadDelta: 0,
+      });
+
+      await syncTextMessagesFromStorage();
+      await flushOutboxOnce();
+    } catch {
+      setInputText(draft);
+    }
   };
 
   const pickImage = async () => {
@@ -74,11 +222,12 @@ export function useChat(currentUser) {
     }
 
     pushMessage({
-      id: createId(),
+      id: createId("image"),
       type: "image",
       imageUri: asset.uri,
       senderId: currentUser.id,
       createdAt: new Date().toISOString(),
+      __volatile: true,
     });
 
     return { ok: true };
@@ -101,7 +250,7 @@ export function useChat(currentUser) {
 
     const nextRecording = new Audio.Recording();
     await nextRecording.prepareToRecordAsync(
-      Audio.RecordingOptionsPresets.HIGH_QUALITY
+      Audio.RecordingOptionsPresets.HIGH_QUALITY,
     );
     await nextRecording.startAsync();
 
@@ -127,12 +276,13 @@ export function useChat(currentUser) {
 
     if (uri) {
       pushMessage({
-        id: createId(),
+        id: createId("audio"),
         type: "audio",
         audioUri: uri,
         durationMillis: status.durationMillis ?? 0,
         senderId: currentUser.id,
         createdAt: new Date().toISOString(),
+        __volatile: true,
       });
     }
 
@@ -157,7 +307,7 @@ export function useChat(currentUser) {
 
     const { sound } = await Audio.Sound.createAsync(
       { uri },
-      { shouldPlay: true }
+      { shouldPlay: true },
     );
 
     sound.setOnPlaybackStatusUpdate(async (status) => {
@@ -177,6 +327,11 @@ export function useChat(currentUser) {
   };
 
   const cleanupMedia = async () => {
+    if (flushTimerRef.current) {
+      clearInterval(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+
     if (soundRef.current) {
       await soundRef.current.unloadAsync();
       soundRef.current = null;
@@ -208,13 +363,7 @@ export function useChat(currentUser) {
     togglePlayAudio,
     cleanupMedia,
     appendBotWelcome: (username) => {
-      pushMessage({
-        id: createId(),
-        type: "text",
-        text: `欢迎你，${username}！现在可以开始聊天了。`,
-        senderId: BOT_USER.id,
-        createdAt: new Date().toISOString(),
-      });
+      pushMessage(createBotWelcomeMessage(username));
     },
   };
 }
