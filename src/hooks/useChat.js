@@ -14,7 +14,8 @@ export const BOT_USER = {
 };
 
 const OUTBOX_POLL_INTERVAL_MS = 2500;
-const TEXT_PAGE_SIZE = 200;
+const MESSAGE_PAGE_SIZE = 200;
+const MEDIA_PAYLOAD_PREFIX = "__LOCAL_MEDIA__:";
 
 function createId(prefix = "msg") {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
@@ -32,14 +33,69 @@ function sortByCreatedAt(list) {
   });
 }
 
-function mapStoredTextToUi(row) {
-  return {
+function serializeMediaPayload(payload) {
+  return `${MEDIA_PAYLOAD_PREFIX}${JSON.stringify(payload)}`;
+}
+
+function parseMediaPayload(text) {
+  if (typeof text !== "string" || !text.startsWith(MEDIA_PAYLOAD_PREFIX)) {
+    return null;
+  }
+
+  try {
+    const raw = text.slice(MEDIA_PAYLOAD_PREFIX.length);
+    const parsed = JSON.parse(raw);
+    if (parsed?.type === "image" && parsed?.imageUri) {
+      return {
+        type: "image",
+        imageUri: parsed.imageUri,
+      };
+    }
+
+    if (parsed?.type === "audio" && parsed?.audioUri) {
+      return {
+        type: "audio",
+        audioUri: parsed.audioUri,
+        durationMillis: Number(parsed.durationMillis || 0),
+      };
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function mapStoredRowToUi(row) {
+  const media = parseMediaPayload(row.text || "");
+  const base = {
     id: row.clientId || String(row.id),
-    type: "text",
-    text: row.text || "",
     senderId: row.senderId,
     createdAt: row.createdAtServer || row.createdAtClient,
     status: row.status,
+  };
+
+  if (media?.type === "image") {
+    return {
+      ...base,
+      type: "image",
+      imageUri: media.imageUri,
+    };
+  }
+
+  if (media?.type === "audio") {
+    return {
+      ...base,
+      type: "audio",
+      audioUri: media.audioUri,
+      durationMillis: media.durationMillis,
+    };
+  }
+
+  return {
+    ...base,
+    type: "text",
+    text: row.text || "",
   };
 }
 
@@ -87,23 +143,23 @@ export function useChat(currentUser) {
     setMessages((prev) => sortByCreatedAt([...prev, message]));
   };
 
-  const syncTextMessagesFromStorage = async () => {
+  const syncMessagesFromStorage = async () => {
     const conversationId = conversationIdRef.current;
     if (!conversationId) {
       return 0;
     }
 
     const stored = await listMessagesByConversation(conversationId, {
-      limit: TEXT_PAGE_SIZE,
+      limit: MESSAGE_PAGE_SIZE,
     });
-    const textMessages = stored.map(mapStoredTextToUi);
+    const persistentMessages = stored.map(mapStoredRowToUi);
 
     setMessages((prev) => {
       const volatileMessages = prev.filter((item) => item.__volatile === true);
-      return sortByCreatedAt([...textMessages, ...volatileMessages]);
+      return sortByCreatedAt([...persistentMessages, ...volatileMessages]);
     });
 
-    return textMessages.length;
+    return persistentMessages.length;
   };
 
   const flushOutboxOnce = async () => {
@@ -119,7 +175,7 @@ export function useChat(currentUser) {
       });
 
       if (summary.processed > 0) {
-        await syncTextMessagesFromStorage();
+        await syncMessagesFromStorage();
       }
     } finally {
       isFlushingRef.current = false;
@@ -140,10 +196,10 @@ export function useChat(currentUser) {
       await initLocalChatStorage();
       if (cancelled) return;
 
-      const textCount = await syncTextMessagesFromStorage();
+      const messageCount = await syncMessagesFromStorage();
       if (cancelled) return;
 
-      if (textCount === 0) {
+      if (messageCount === 0) {
         setMessages([
           createBotWelcomeMessage(currentUser.username || currentUser.id),
         ]);
@@ -189,7 +245,7 @@ export function useChat(currentUser) {
         unreadDelta: 0,
       });
 
-      await syncTextMessagesFromStorage();
+      await syncMessagesFromStorage();
       await flushOutboxOnce();
     } catch {
       setInputText(draft);
@@ -197,7 +253,7 @@ export function useChat(currentUser) {
   };
 
   const pickImage = async () => {
-    if (!currentUser) {
+    if (!currentUser || !conversationIdRef.current) {
       return { ok: false, message: "请先登录" };
     }
 
@@ -221,16 +277,23 @@ export function useChat(currentUser) {
       return { ok: false, message: "未读取到图片" };
     }
 
-    pushMessage({
-      id: createId("image"),
-      type: "image",
-      imageUri: asset.uri,
-      senderId: currentUser.id,
-      createdAt: new Date().toISOString(),
-      __volatile: true,
-    });
+    try {
+      await enqueueTextMessage({
+        conversationId: conversationIdRef.current,
+        senderId: currentUser.id,
+        text: serializeMediaPayload({
+          type: "image",
+          imageUri: asset.uri,
+        }),
+        unreadDelta: 0,
+      });
 
-    return { ok: true };
+      await syncMessagesFromStorage();
+      await flushOutboxOnce();
+      return { ok: true };
+    } catch {
+      return { ok: false, message: "图片发送失败，请稍后重试" };
+    }
   };
 
   const startRecording = async () => {
@@ -261,7 +324,7 @@ export function useChat(currentUser) {
   };
 
   const stopRecording = async () => {
-    if (!recording || !currentUser) {
+    if (!recording || !currentUser || !conversationIdRef.current) {
       return { ok: false, message: "当前没有录音" };
     }
 
@@ -275,15 +338,25 @@ export function useChat(currentUser) {
     });
 
     if (uri) {
-      pushMessage({
-        id: createId("audio"),
-        type: "audio",
-        audioUri: uri,
-        durationMillis: status.durationMillis ?? 0,
-        senderId: currentUser.id,
-        createdAt: new Date().toISOString(),
-        __volatile: true,
-      });
+      try {
+        await enqueueTextMessage({
+          conversationId: conversationIdRef.current,
+          senderId: currentUser.id,
+          text: serializeMediaPayload({
+            type: "audio",
+            audioUri: uri,
+            durationMillis: status.durationMillis ?? 0,
+          }),
+          unreadDelta: 0,
+        });
+
+        await syncMessagesFromStorage();
+        await flushOutboxOnce();
+      } catch {
+        setRecording(null);
+        setIsRecording(false);
+        return { ok: false, message: "语音发送失败，请稍后重试" };
+      }
     }
 
     setRecording(null);
