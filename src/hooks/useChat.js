@@ -6,6 +6,7 @@ import {
   flushOutboxQueue,
   initLocalChatStorage,
   listMessagesByConversation,
+  markOutboxSent,
 } from "../services/chat/localChatStorage";
 
 export const BOT_USER = {
@@ -17,6 +18,15 @@ const OUTBOX_POLL_INTERVAL_MS = 2500;
 const MESSAGE_PAGE_SIZE = 200;
 const MEDIA_PAYLOAD_PREFIX = "__LOCAL_MEDIA__:";
 
+// Phase 2: realtime + seq incremental sync configs
+// 可通过全局变量注入：globalThis.__CHAT_WS_URL__ / globalThis.__CHAT_SYNC_HTTP_URL__
+const CHAT_WS_URL = globalThis.__CHAT_WS_URL__ || "";
+const CHAT_SYNC_HTTP_URL = globalThis.__CHAT_SYNC_HTTP_URL__ || "";
+const SYNC_PULL_INTERVAL_MS = 12_000;
+const WS_RECONNECT_BASE_MS = 1200;
+const WS_RECONNECT_MAX_MS = 10_000;
+const WS_REQUEST_TIMEOUT_MS = 12_000;
+
 function createId(prefix = "msg") {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
 }
@@ -25,8 +35,15 @@ function buildConversationId(userId) {
   return `direct-${userId}-${BOT_USER.id}`;
 }
 
-function sortByCreatedAt(list) {
+function sortBySeqThenTime(list) {
   return [...list].sort((a, b) => {
+    const leftSeq = Number.isFinite(Number(a.seq)) ? Number(a.seq) : null;
+    const rightSeq = Number.isFinite(Number(b.seq)) ? Number(b.seq) : null;
+
+    if (leftSeq !== null && rightSeq !== null && leftSeq !== rightSeq) {
+      return leftSeq - rightSeq;
+    }
+
     const left = new Date(a.createdAt || 0).getTime();
     const right = new Date(b.createdAt || 0).getTime();
     return left - right;
@@ -77,11 +94,15 @@ function parseMediaPayload(text) {
 
 function mapStoredRowToUi(row) {
   const media = parseMediaPayload(row.text || "");
+  const seq = Number(row?.meta?.seq);
+
   const base = {
     id: row.clientId || String(row.id),
     senderId: row.senderId,
     createdAt: row.createdAtServer || row.createdAtClient,
     status: row.status,
+    seq: Number.isFinite(seq) ? seq : null,
+    serverId: row.serverId || row?.meta?.serverId || null,
   };
 
   if (media?.type === "image") {
@@ -145,6 +166,72 @@ async function sendTaskMock(task) {
   };
 }
 
+function normalizeRemoteMessage(msg) {
+  if (!msg || typeof msg !== "object") return null;
+
+  const serverId = msg.serverId || msg.id || null;
+  const clientId =
+    msg.clientId ||
+    (serverId ? `srv-${serverId}` : Number.isFinite(Number(msg.seq))
+      ? `seq-${msg.seq}`
+      : createId("remote"));
+
+  const type = msg.type || "text";
+  const senderId = msg.senderId || BOT_USER.id;
+  const seq = Number(msg.seq);
+  const createdAt = msg.createdAtServer || msg.createdAt || new Date().toISOString();
+
+  let text = "";
+  let previewText = "";
+
+  if (type === "image") {
+    const imageUri = msg.imageUri || msg.url || msg.remoteUrl || "";
+    text = serializeMediaPayload({ type: "image", imageUri });
+    previewText = "[图片]";
+  } else if (type === "audio") {
+    const audioUri = msg.audioUri || msg.url || msg.remoteUrl || "";
+    text = serializeMediaPayload({
+      type: "audio",
+      audioUri,
+      durationMillis: Number(msg.durationMillis || 0),
+    });
+    previewText = "[语音]";
+  } else if (type === "video") {
+    const videoUri = msg.videoUri || msg.url || msg.remoteUrl || "";
+    text = serializeMediaPayload({
+      type: "video",
+      videoUri,
+      durationMillis: Number(msg.durationMillis || 0),
+    });
+    previewText = "[视频]";
+  } else {
+    text = String(msg.text || "");
+    previewText = text;
+  }
+
+  if (!text?.trim()) return null;
+
+  return {
+    serverId,
+    clientId,
+    type,
+    senderId,
+    seq: Number.isFinite(seq) ? seq : null,
+    text,
+    previewText,
+    createdAt,
+  };
+}
+
+function parseSyncMessagesPayload(payload) {
+  if (!payload) return [];
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload.messages)) return payload.messages;
+  if (Array.isArray(payload.items)) return payload.items;
+  if (Array.isArray(payload.data)) return payload.data;
+  return [];
+}
+
 export function useChat(currentUser) {
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState("");
@@ -154,11 +241,26 @@ export function useChat(currentUser) {
 
   const soundRef = useRef(null);
   const flushTimerRef = useRef(null);
+  const syncTimerRef = useRef(null);
+  const reconnectTimerRef = useRef(null);
+
   const isFlushingRef = useRef(false);
+  const isSyncingRef = useRef(false);
   const conversationIdRef = useRef(null);
+  const lastSeqRef = useRef(0);
+
+  const wsRef = useRef(null);
+  const wsReconnectAttemptRef = useRef(0);
+  const isWsConnectedRef = useRef(false);
+  const pendingWsRequestsRef = useRef(new Map());
 
   const pushMessage = (message) => {
-    setMessages((prev) => sortByCreatedAt([...prev, message]));
+    setMessages((prev) => sortBySeqThenTime([...prev, message]));
+
+    const seq = Number(message?.seq);
+    if (Number.isFinite(seq)) {
+      lastSeqRef.current = Math.max(lastSeqRef.current, seq);
+    }
   };
 
   const syncMessagesFromStorage = async () => {
@@ -172,12 +274,214 @@ export function useChat(currentUser) {
     });
     const persistentMessages = stored.map(mapStoredRowToUi);
 
+    let nextMaxSeq = 0;
+    for (const item of persistentMessages) {
+      const seq = Number(item?.seq);
+      if (Number.isFinite(seq)) {
+        nextMaxSeq = Math.max(nextMaxSeq, seq);
+      }
+    }
+    lastSeqRef.current = nextMaxSeq;
+
     setMessages((prev) => {
       const volatileMessages = prev.filter((item) => item.__volatile === true);
-      return sortByCreatedAt([...persistentMessages, ...volatileMessages]);
+      return sortBySeqThenTime([...persistentMessages, ...volatileMessages]);
     });
 
     return persistentMessages.length;
+  };
+
+  const persistRemoteMessage = async (rawMessage) => {
+    const normalized = normalizeRemoteMessage(rawMessage);
+    const conversationId = conversationIdRef.current;
+
+    if (!normalized || !conversationId) return false;
+
+    const unreadDelta = normalized.senderId === currentUser?.id ? 0 : 1;
+
+    await enqueueLocalMessage({
+      conversationId,
+      senderId: normalized.senderId,
+      text: normalized.text,
+      messageType: normalized.type,
+      previewText: normalized.previewText,
+      clientId: normalized.clientId,
+      createdAtClient: normalized.createdAt,
+      unreadDelta,
+      meta: {
+        localOnly: false,
+        remote: true,
+        seq: normalized.seq,
+        serverId: normalized.serverId,
+      },
+    });
+
+    await markOutboxSent({
+      conversationId,
+      clientId: normalized.clientId,
+      serverId: normalized.serverId,
+      createdAtServer: normalized.createdAt,
+    });
+
+    if (Number.isFinite(Number(normalized.seq))) {
+      lastSeqRef.current = Math.max(lastSeqRef.current, Number(normalized.seq));
+    }
+
+    return true;
+  };
+
+  const handleRealtimeEvent = async (event) => {
+    if (!event || typeof event !== "object") return;
+
+    const type = event.type || event.event || "";
+
+    // RPC acks
+    if ((type === "message:ack" || type === "ack") && event.requestId) {
+      const pending = pendingWsRequestsRef.current.get(event.requestId);
+      if (pending) {
+        clearTimeout(pending.timer);
+        pendingWsRequestsRef.current.delete(event.requestId);
+        pending.resolve(event.payload || event.data || {});
+      }
+      return;
+    }
+
+    if ((type === "error" || type === "message:error") && event.requestId) {
+      const pending = pendingWsRequestsRef.current.get(event.requestId);
+      if (pending) {
+        clearTimeout(pending.timer);
+        pendingWsRequestsRef.current.delete(event.requestId);
+        pending.reject(new Error(event.message || "ws request failed"));
+      }
+      return;
+    }
+
+    // realtime message push
+    if (
+      type === "message:new" ||
+      type === "chat:message" ||
+      type === "message" ||
+      type === "sync:message"
+    ) {
+      const payload = event.payload || event.data || event.message || event;
+      const list = Array.isArray(payload) ? payload : [payload];
+
+      let changed = false;
+      for (const item of list) {
+        const ok = await persistRemoteMessage(item);
+        changed = changed || ok;
+      }
+
+      if (changed) {
+        await syncMessagesFromStorage();
+      }
+      return;
+    }
+
+    // server can proactively push a sync batch
+    if (type === "sync:batch" || type === "sync:result") {
+      const list = parseSyncMessagesPayload(event.payload || event.data || {});
+      let changed = false;
+      for (const item of list) {
+        const ok = await persistRemoteMessage(item);
+        changed = changed || ok;
+      }
+      if (changed) {
+        await syncMessagesFromStorage();
+      }
+    }
+  };
+
+  const wsRequest = async (payload) => {
+    const ws = wsRef.current;
+    const conversationId = conversationIdRef.current;
+
+    if (!ws || ws.readyState !== WebSocket.OPEN || !conversationId) {
+      throw new Error("ws not ready");
+    }
+
+    const requestId = createId("wsreq");
+
+    const requestBody = {
+      requestId,
+      conversationId,
+      userId: currentUser?.id,
+      ...payload,
+    };
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pendingWsRequestsRef.current.delete(requestId);
+        reject(new Error("ws request timeout"));
+      }, WS_REQUEST_TIMEOUT_MS);
+
+      pendingWsRequestsRef.current.set(requestId, { resolve, reject, timer });
+
+      try {
+        ws.send(JSON.stringify(requestBody));
+      } catch (error) {
+        clearTimeout(timer);
+        pendingWsRequestsRef.current.delete(requestId);
+        reject(error);
+      }
+    });
+  };
+
+  const sendTaskRemoteFirst = async (task) => {
+    const payload = task?.payload || {};
+
+    if (isWsConnectedRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
+      const ack = await wsRequest({
+        type: "message:send",
+        data: {
+          clientId: task.clientId,
+          type: payload.type || "text",
+          text: payload.text,
+          senderId: payload.senderId,
+          createdAtClient: payload.createdAtClient,
+          meta: payload.meta || {},
+        },
+      });
+
+      return {
+        serverId: ack.serverId || ack.id || null,
+        seq: Number.isFinite(Number(ack.seq)) ? Number(ack.seq) : null,
+        createdAtServer: ack.createdAtServer || ack.createdAt || new Date().toISOString(),
+      };
+    }
+
+    if (CHAT_SYNC_HTTP_URL) {
+      const response = await fetch(`${CHAT_SYNC_HTTP_URL.replace(/\/$/, "")}/send`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          conversationId: task.conversationId,
+          userId: currentUser?.id,
+          clientId: task.clientId,
+          type: payload.type || "text",
+          text: payload.text,
+          senderId: payload.senderId,
+          createdAtClient: payload.createdAtClient,
+          meta: payload.meta || {},
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`send failed: ${response.status}`);
+      }
+
+      const ack = await response.json();
+      return {
+        serverId: ack.serverId || ack.id || null,
+        seq: Number.isFinite(Number(ack.seq)) ? Number(ack.seq) : null,
+        createdAtServer: ack.createdAtServer || ack.createdAt || new Date().toISOString(),
+      };
+    }
+
+    // fallback for local dev without remote
+    return sendTaskMock(task);
   };
 
   const flushOutboxOnce = async () => {
@@ -188,8 +492,42 @@ export function useChat(currentUser) {
     isFlushingRef.current = true;
     try {
       const summary = await flushOutboxQueue({
-        sendTask: sendTaskMock,
+        sendTask: sendTaskRemoteFirst,
         batchSize: 20,
+        onProgress: async (result, task) => {
+          if (!result?.ok || !result?.result) return;
+
+          const ack = result.result;
+          const seq = Number(ack.seq);
+          if (!Number.isFinite(seq)) return;
+
+          // 将 seq 写入本地（借助同 clientId 的 upsert），再标记 sent，保证后续按 seq 增量同步可用
+          await enqueueLocalMessage({
+            conversationId: task.conversationId,
+            senderId: task.payload?.senderId || currentUser?.id || BOT_USER.id,
+            text: task.payload?.text || "",
+            messageType: task.payload?.type || "text",
+            previewText: null,
+            clientId: task.clientId,
+            createdAtClient: task.payload?.createdAtClient || new Date().toISOString(),
+            unreadDelta: 0,
+            meta: {
+              ...(task.payload?.meta || {}),
+              localOnly: false,
+              seq,
+              serverId: ack.serverId || null,
+            },
+          });
+
+          await markOutboxSent({
+            conversationId: task.conversationId,
+            clientId: task.clientId,
+            serverId: ack.serverId || null,
+            createdAtServer: ack.createdAtServer || new Date().toISOString(),
+          });
+
+          lastSeqRef.current = Math.max(lastSeqRef.current, seq);
+        },
       });
 
       if (summary.processed > 0) {
@@ -200,6 +538,145 @@ export function useChat(currentUser) {
     }
   };
 
+  const pullIncrementalBySeq = async () => {
+    if (isSyncingRef.current || !conversationIdRef.current || !CHAT_SYNC_HTTP_URL) {
+      return;
+    }
+
+    isSyncingRef.current = true;
+    try {
+      const base = CHAT_SYNC_HTTP_URL.replace(/\/$/, "");
+      const url = `${base}/sync?conversationId=${encodeURIComponent(
+        conversationIdRef.current,
+      )}&afterSeq=${encodeURIComponent(String(lastSeqRef.current || 0))}`;
+
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`sync failed: ${response.status}`);
+      }
+
+      const payload = await response.json();
+      const list = parseSyncMessagesPayload(payload);
+
+      if (!list.length) return;
+
+      let changed = false;
+      for (const item of list) {
+        const ok = await persistRemoteMessage(item);
+        changed = changed || ok;
+      }
+
+      if (changed) {
+        await syncMessagesFromStorage();
+      }
+    } finally {
+      isSyncingRef.current = false;
+    }
+  };
+
+  const clearPendingWsRequests = () => {
+    const pendingEntries = [...pendingWsRequestsRef.current.entries()];
+    for (const [, pending] of pendingEntries) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error("ws disconnected"));
+    }
+    pendingWsRequestsRef.current.clear();
+  };
+
+  const closeSocket = () => {
+    clearPendingWsRequests();
+
+    if (wsRef.current) {
+      try {
+        wsRef.current.close();
+      } catch {
+        // ignore
+      }
+      wsRef.current = null;
+    }
+
+    isWsConnectedRef.current = false;
+  };
+
+  const scheduleWsReconnect = () => {
+    if (!CHAT_WS_URL || !conversationIdRef.current) return;
+    if (reconnectTimerRef.current) return;
+
+    wsReconnectAttemptRef.current += 1;
+    const delayMs = Math.min(
+      WS_RECONNECT_BASE_MS * 2 ** (wsReconnectAttemptRef.current - 1),
+      WS_RECONNECT_MAX_MS,
+    );
+
+    reconnectTimerRef.current = setTimeout(() => {
+      reconnectTimerRef.current = null;
+      connectWebSocket();
+    }, delayMs);
+  };
+
+  const connectWebSocket = () => {
+    if (!CHAT_WS_URL || !conversationIdRef.current || !currentUser?.id) {
+      return;
+    }
+
+    closeSocket();
+
+    try {
+      const ws = new WebSocket(CHAT_WS_URL);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        isWsConnectedRef.current = true;
+        wsReconnectAttemptRef.current = 0;
+
+        // join conversation with cursor so server can补发
+        try {
+          ws.send(
+            JSON.stringify({
+              type: "chat:join",
+              conversationId: conversationIdRef.current,
+              userId: currentUser.id,
+              afterSeq: lastSeqRef.current || 0,
+            }),
+          );
+        } catch {
+          // ignore join send errors
+        }
+      };
+
+      ws.onmessage = (event) => {
+        let parsed = null;
+        try {
+          parsed = JSON.parse(event?.data || "{}");
+        } catch {
+          return;
+        }
+
+        handleRealtimeEvent(parsed).catch(() => {
+          // swallow realtime handler errors to keep socket alive
+        });
+      };
+
+      ws.onerror = () => {
+        // onclose 中统一处理重连
+      };
+
+      ws.onclose = () => {
+        isWsConnectedRef.current = false;
+        clearPendingWsRequests();
+        scheduleWsReconnect();
+      };
+    } catch {
+      scheduleWsReconnect();
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
 
@@ -207,6 +684,7 @@ export function useChat(currentUser) {
       if (!currentUser?.id) {
         conversationIdRef.current = null;
         setMessages([]);
+        closeSocket();
         return;
       }
 
@@ -226,11 +704,26 @@ export function useChat(currentUser) {
       await flushOutboxOnce();
       if (cancelled) return;
 
+      // 1) websocket realtime
+      connectWebSocket();
+
+      // 2) periodic outbox flush
       flushTimerRef.current = setInterval(() => {
         flushOutboxOnce().catch(() => {
           // ignore interval flush errors
         });
       }, OUTBOX_POLL_INTERVAL_MS);
+
+      // 3) seq incremental sync (cold start / disconnect补偿)
+      await pullIncrementalBySeq().catch(() => {
+        // ignore first pull errors
+      });
+
+      syncTimerRef.current = setInterval(() => {
+        pullIncrementalBySeq().catch(() => {
+          // ignore periodic sync errors
+        });
+      }, SYNC_PULL_INTERVAL_MS);
     };
 
     setupLocalChat().catch(() => {
@@ -239,10 +732,23 @@ export function useChat(currentUser) {
 
     return () => {
       cancelled = true;
+
       if (flushTimerRef.current) {
         clearInterval(flushTimerRef.current);
         flushTimerRef.current = null;
       }
+
+      if (syncTimerRef.current) {
+        clearInterval(syncTimerRef.current);
+        syncTimerRef.current = null;
+      }
+
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+
+      closeSocket();
     };
   }, [currentUser?.id]);
 
@@ -454,8 +960,8 @@ export function useChat(currentUser) {
       { shouldPlay: true },
     );
 
-    sound.setOnPlaybackStatusUpdate(async (status) => {
-      if (status.didJustFinish) {
+    sound.setOnPlaybackStatusUpdate(async (playbackStatus) => {
+      if (playbackStatus.didJustFinish) {
         await sound.unloadAsync();
         if (soundRef.current === sound) {
           soundRef.current = null;
@@ -475,6 +981,18 @@ export function useChat(currentUser) {
       clearInterval(flushTimerRef.current);
       flushTimerRef.current = null;
     }
+
+    if (syncTimerRef.current) {
+      clearInterval(syncTimerRef.current);
+      syncTimerRef.current = null;
+    }
+
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+
+    closeSocket();
 
     if (soundRef.current) {
       await soundRef.current.unloadAsync();
