@@ -1,29 +1,23 @@
-import { useState } from "react";
-import {
-  extractToken,
-  extractUser,
-  loginApi,
-  logoutApi,
-  registerApi,
-} from "../api/authApi";
+import { useState } from 'react';
+import { extractToken, extractUser, loginApi, logoutApi, registerApi } from '../api/authApi';
 
 export function useAuth() {
   const [currentUser, setCurrentUser] = useState(null);
-  const [authToken, setAuthToken] = useState("");
+  const [authToken, setAuthToken] = useState('');
 
   const register = async ({ username, password }) => {
-    const safeUsername = String(username || "").trim();
+    const safeUsername = String(username || '').trim();
 
     if (!safeUsername || !password) {
-      return { ok: false, message: "请填写完整用户名和密码" };
+      return { ok: false, message: '请填写完整用户名和密码' };
     }
 
     if (safeUsername.length < 2) {
-      return { ok: false, message: "用户名至少 2 位" };
+      return { ok: false, message: '用户名至少 2 位' };
     }
 
     if (String(password).length < 6) {
-      return { ok: false, message: "密码至少 6 位" };
+      return { ok: false, message: '密码至少 6 位' };
     }
 
     try {
@@ -35,7 +29,7 @@ export function useAuth() {
       if (!result.ok) {
         return {
           ok: false,
-          message: result.message || "注册失败",
+          message: result.message || '注册失败',
         };
       }
 
@@ -53,16 +47,16 @@ export function useAuth() {
     } catch (error) {
       return {
         ok: false,
-        message: error?.message || "注册请求失败",
+        message: error?.message || '注册请求失败',
       };
     }
   };
 
   const login = async ({ username, password }) => {
-    const safeUsername = String(username || "").trim();
+    const safeUsername = String(username || '').trim();
 
     if (!safeUsername || !password) {
-      return { ok: false, message: "请填写完整用户名和密码" };
+      return { ok: false, message: '请填写完整用户名和密码' };
     }
 
     try {
@@ -74,7 +68,7 @@ export function useAuth() {
       if (!result.ok) {
         return {
           ok: false,
-          message: result.message || "登录失败",
+          message: result.message || '登录失败',
         };
       }
 
@@ -92,7 +86,7 @@ export function useAuth() {
     } catch (error) {
       return {
         ok: false,
-        message: error?.message || "登录请求失败",
+        message: error?.message || '登录请求失败',
       };
     }
   };
@@ -104,7 +98,7 @@ export function useAuth() {
       // 即使登出接口失败，也清理本地态
     } finally {
       setCurrentUser(null);
-      setAuthToken("");
+      setAuthToken('');
     }
   };
 

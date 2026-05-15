@@ -1,22 +1,22 @@
-import { Alert } from "react-native";
-import { useAuth } from "./src/hooks/useAuth";
-import AuthScreen from "./src/screens/AuthScreen";
-import ChatScreen from "./src/screens/ChatScreen";
+import { Alert } from 'react-native';
+import { useAuth } from './src/hooks/useAuth';
+import AuthScreen from './src/screens/AuthScreen';
+import ChatScreen from './src/screens/ChatScreen';
 
 export default function App() {
   const { currentUser, login, register, logout } = useAuth();
 
-  const handleLogin = async (form) => {
+  const handleLogin = async form => {
     const result = await login(form);
     if (!result.ok) {
-      Alert.alert("登录失败", result.message);
+      Alert.alert('登录失败', result.message);
     }
   };
 
-  const handleRegister = async (form) => {
+  const handleRegister = async form => {
     const result = await register(form);
     if (!result.ok) {
-      Alert.alert("注册失败", result.message);
+      Alert.alert('注册失败', result.message);
     }
   };
 

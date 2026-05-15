@@ -1,21 +1,21 @@
 // src/api/authApi.js
 // 认证相关接口：登录 / 注册 / 登出
 
-import { requestJson } from "./client";
+import { requestJson } from './client';
 
-export function extractUser(payload, fallbackUsername = "") {
+export function extractUser(payload, fallbackUsername = '') {
   const raw = payload?.user || payload?.data?.user || payload?.data || payload;
 
-  if (!raw || typeof raw !== "object") {
+  if (!raw || typeof raw !== 'object') {
     return {
-      id: "",
+      id: '',
       username: fallbackUsername,
     };
   }
 
   return {
-    id: String(raw.id || raw.userId || raw.uid || ""),
-    username: String(raw.username || raw.name || fallbackUsername || ""),
+    id: String(raw.id || raw.userId || raw.uid || ''),
+    username: String(raw.username || raw.name || fallbackUsername || ''),
     ...raw,
   };
 }
@@ -26,30 +26,30 @@ export function extractToken(payload) {
     payload?.accessToken ||
     payload?.data?.token ||
     payload?.data?.accessToken ||
-    ""
+    ''
   );
 }
 
 export async function loginApi({ username, password }) {
   return requestJson({
-    path: "/auth/login",
-    method: "POST",
-    body: { username, password },
+    path: '/api/auth/login',
+    method: 'POST',
+    body: { email: username, password },
   });
 }
 
 export async function registerApi({ username, password }) {
   return requestJson({
-    path: "/auth/register",
-    method: "POST",
+    path: '/api/auth/register',
+    method: 'POST',
     body: { username, password },
   });
 }
 
 export async function logoutApi({ token }) {
   return requestJson({
-    path: "/auth/logout",
-    method: "POST",
+    path: '/api/auth/logout',
+    method: 'POST',
     token,
   });
 }

@@ -1,6 +1,6 @@
-import { Video } from "expo-av";
-import * as MediaLibrary from "expo-media-library";
-import { useRef, useState } from "react";
+import { Video } from 'expo-av';
+import * as MediaLibrary from 'expo-media-library';
+import { useRef, useState } from 'react';
 import {
   Alert,
   Animated,
@@ -13,34 +13,26 @@ import {
   TouchableOpacity,
   TouchableWithoutFeedback,
   View,
-} from "react-native";
+} from 'react-native';
 
 const AUDIO_MIN_WIDTH = 90;
 const AUDIO_MAX_WIDTH = 220;
 const VIDEO_SWIPE_CLOSE_THRESHOLD = 90;
-const SCREEN_WIDTH = Dimensions.get("window").width;
+const SCREEN_WIDTH = Dimensions.get('window').width;
 
 function getAudioBubbleWidth(durationMillis = 0) {
   const seconds = Math.max(1, Math.ceil(durationMillis / 1000));
-  return Math.min(
-    AUDIO_MAX_WIDTH,
-    Math.max(AUDIO_MIN_WIDTH, 70 + seconds * 10),
-  );
+  return Math.min(AUDIO_MAX_WIDTH, Math.max(AUDIO_MIN_WIDTH, 70 + seconds * 10));
 }
 
 function formatVideoDuration(durationMillis = 0) {
   const totalSeconds = Math.max(0, Math.round(durationMillis / 1000));
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
-export default function MessageBubble({
-  item,
-  isMine,
-  isPlaying,
-  onPlayAudio,
-}) {
+export default function MessageBubble({ item, isMine, isPlaying, onPlayAudio }) {
   const [previewVisible, setPreviewVisible] = useState(false);
   const [videoPreviewVisible, setVideoPreviewVisible] = useState(false);
   const [savingImage, setSavingImage] = useState(false);
@@ -52,7 +44,7 @@ export default function MessageBubble({
   const videoBackdropOpacity = videoSwipeX.interpolate({
     inputRange: [-SCREEN_WIDTH, 0, SCREEN_WIDTH],
     outputRange: [0.2, 0.92, 0.2],
-    extrapolate: "clamp",
+    extrapolate: 'clamp',
   });
 
   const closeVideoPreview = () => {
@@ -89,8 +81,7 @@ export default function MessageBubble({
     PanResponder.create({
       onMoveShouldSetPanResponder: (_, gestureState) => {
         return (
-          Math.abs(gestureState.dx) > 12 &&
-          Math.abs(gestureState.dx) > Math.abs(gestureState.dy)
+          Math.abs(gestureState.dx) > 12 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy)
         );
       },
       onPanResponderMove: (_, gestureState) => {
@@ -115,7 +106,7 @@ export default function MessageBubble({
           useNativeDriver: true,
         }).start();
       },
-    }),
+    })
   ).current;
 
   const durationSec = Math.max(1, Math.ceil((item.durationMillis || 0) / 1000));
@@ -124,10 +115,10 @@ export default function MessageBubble({
 
   const waveBars = [6, 10, 14];
 
-  const ensureMediaPermission = async (forType = "媒体") => {
+  const ensureMediaPermission = async (forType = '媒体') => {
     const permission = await MediaLibrary.requestPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert("权限不足", `请允许访问相册后再保存${forType}`);
+      Alert.alert('权限不足', `请允许访问相册后再保存${forType}`);
       return false;
     }
     return true;
@@ -136,11 +127,11 @@ export default function MessageBubble({
   const saveAssetToAlbum = async (uri, successText) => {
     const asset = await MediaLibrary.createAssetAsync(uri);
     try {
-      await MediaLibrary.createAlbumAsync("AIChat", asset, false);
+      await MediaLibrary.createAlbumAsync('AIChat', asset, false);
     } catch {
       // 相册已存在时忽略
     }
-    Alert.alert("保存成功", successText);
+    Alert.alert('保存成功', successText);
   };
 
   const handleSaveImage = async () => {
@@ -150,14 +141,14 @@ export default function MessageBubble({
 
     try {
       setSavingImage(true);
-      const granted = await ensureMediaPermission("图片");
+      const granted = await ensureMediaPermission('图片');
       if (!granted) {
         return;
       }
 
-      await saveAssetToAlbum(item.imageUri, "图片已保存到系统相册");
+      await saveAssetToAlbum(item.imageUri, '图片已保存到系统相册');
     } catch (error) {
-      Alert.alert("保存失败", error?.message ?? "图片保存失败，请稍后重试");
+      Alert.alert('保存失败', error?.message ?? '图片保存失败，请稍后重试');
     } finally {
       setSavingImage(false);
     }
@@ -170,14 +161,14 @@ export default function MessageBubble({
 
     try {
       setSavingVideo(true);
-      const granted = await ensureMediaPermission("视频");
+      const granted = await ensureMediaPermission('视频');
       if (!granted) {
         return;
       }
 
-      await saveAssetToAlbum(item.videoUri, "视频已保存到系统相册");
+      await saveAssetToAlbum(item.videoUri, '视频已保存到系统相册');
     } catch (error) {
-      Alert.alert("保存失败", error?.message ?? "视频保存失败，请稍后重试");
+      Alert.alert('保存失败', error?.message ?? '视频保存失败，请稍后重试');
     } finally {
       setSavingVideo(false);
     }
@@ -189,27 +180,19 @@ export default function MessageBubble({
         style={[
           styles.bubble,
           isMine ? styles.myBubble : styles.botBubble,
-          item.type === "audio" && styles.audioOuterBubble,
+          item.type === 'audio' && styles.audioOuterBubble,
         ]}
       >
-        {item.type === "text" && (
-          <Text style={styles.messageText}>{item.text}</Text>
-        )}
+        {item.type === 'text' && <Text style={styles.messageText}>{item.text}</Text>}
 
-        {item.type === "image" && (
+        {item.type === 'image' && (
           <>
-            <TouchableOpacity
-              activeOpacity={0.9}
-              onPress={() => setPreviewVisible(true)}
-            >
-              <Image
-                source={{ uri: item.imageUri }}
-                style={styles.messageImage}
-              />
+            <TouchableOpacity activeOpacity={0.9} onPress={() => setPreviewVisible(true)}>
+              <Image source={{ uri: item.imageUri }} style={styles.messageImage} />
             </TouchableOpacity>
 
             <Modal
-              animationType="fade"
+              animationType='fade'
               transparent
               visible={previewVisible}
               onRequestClose={() => setPreviewVisible(false)}
@@ -223,7 +206,7 @@ export default function MessageBubble({
                   <Image
                     source={{ uri: item.imageUri }}
                     style={styles.previewImage}
-                    resizeMode="contain"
+                    resizeMode='contain'
                   />
                 </TouchableOpacity>
 
@@ -234,7 +217,7 @@ export default function MessageBubble({
                     disabled={savingImage}
                   >
                     <Text style={styles.previewActionText}>
-                      {savingImage ? "保存中..." : "保存到相册"}
+                      {savingImage ? '保存中...' : '保存到相册'}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -243,7 +226,7 @@ export default function MessageBubble({
           </>
         )}
 
-        {item.type === "video" && (
+        {item.type === 'video' && (
           <View style={styles.videoWrapper}>
             <TouchableOpacity
               activeOpacity={0.9}
@@ -256,10 +239,10 @@ export default function MessageBubble({
                 ref={inlineVideoRef}
                 source={{ uri: item.videoUri }}
                 style={styles.messageVideo}
-                resizeMode="cover"
+                resizeMode='cover'
                 shouldPlay={false}
                 isLooping={false}
-                onPlaybackStatusUpdate={(status) => {
+                onPlaybackStatusUpdate={status => {
                   resetVideoToStartWhenFinished(status, inlineVideoRef);
                 }}
               />
@@ -276,13 +259,13 @@ export default function MessageBubble({
                 disabled={savingVideo}
               >
                 <Text style={styles.videoSaveButtonText}>
-                  {savingVideo ? "保存中..." : "下载到本地"}
+                  {savingVideo ? '保存中...' : '下载到本地'}
                 </Text>
               </TouchableOpacity>
             </View>
 
             <Modal
-              animationType="fade"
+              animationType='fade'
               transparent
               visible={videoPreviewVisible}
               onRequestClose={closeVideoPreview}
@@ -290,18 +273,12 @@ export default function MessageBubble({
               <View style={styles.videoPreviewModalRoot}>
                 <TouchableWithoutFeedback onPress={closeVideoPreview}>
                   <Animated.View
-                    style={[
-                      styles.videoPreviewBackdrop,
-                      { opacity: videoBackdropOpacity },
-                    ]}
+                    style={[styles.videoPreviewBackdrop, { opacity: videoBackdropOpacity }]}
                   />
                 </TouchableWithoutFeedback>
 
                 <Animated.View
-                  style={[
-                    styles.videoPreviewPanel,
-                    { transform: [{ translateX: videoSwipeX }] },
-                  ]}
+                  style={[styles.videoPreviewPanel, { transform: [{ translateX: videoSwipeX }] }]}
                   {...videoPanResponder.panHandlers}
                 >
                   <View style={styles.videoPreviewHeader}>
@@ -322,14 +299,11 @@ export default function MessageBubble({
                             source={{ uri: item.videoUri }}
                             style={styles.previewVideo}
                             useNativeControls
-                            resizeMode="contain"
+                            resizeMode='contain'
                             shouldPlay={false}
                             isLooping={false}
-                            onPlaybackStatusUpdate={(status) => {
-                              resetVideoToStartWhenFinished(
-                                status,
-                                previewVideoRef,
-                              );
+                            onPlaybackStatusUpdate={status => {
+                              resetVideoToStartWhenFinished(status, previewVideoRef);
                             }}
                           />
                         </View>
@@ -344,7 +318,7 @@ export default function MessageBubble({
                       disabled={savingVideo}
                     >
                       <Text style={styles.previewActionText}>
-                        {savingVideo ? "保存中..." : "下载到本地"}
+                        {savingVideo ? '保存中...' : '下载到本地'}
                       </Text>
                     </TouchableOpacity>
                   </View>
@@ -354,14 +328,10 @@ export default function MessageBubble({
           </View>
         )}
 
-        {item.type === "audio" && (
+        {item.type === 'audio' && (
           <TouchableOpacity
             activeOpacity={0.75}
-            style={[
-              styles.audioCard,
-              { width: audioWidth },
-              isPlaying && styles.audioCardPlaying,
-            ]}
+            style={[styles.audioCard, { width: audioWidth }, isPlaying && styles.audioCardPlaying]}
             onPress={() => onPlayAudio(item.id, item.audioUri)}
           >
             {isMine ? (
@@ -374,9 +344,7 @@ export default function MessageBubble({
                       style={[
                         styles.waveBar,
                         {
-                          height: isPlaying
-                            ? height + (index % 2 === 0 ? 2 : 4)
-                            : height,
+                          height: isPlaying ? height + (index % 2 === 0 ? 2 : 4) : height,
                         },
                       ]}
                     />
@@ -392,9 +360,7 @@ export default function MessageBubble({
                       style={[
                         styles.waveBar,
                         {
-                          height: isPlaying
-                            ? height + (index % 2 === 0 ? 2 : 4)
-                            : height,
+                          height: isPlaying ? height + (index % 2 === 0 ? 2 : 4) : height,
                         },
                       ]}
                     />
@@ -412,17 +378,17 @@ export default function MessageBubble({
 
 const styles = StyleSheet.create({
   messageRow: {
-    width: "100%",
-    flexDirection: "row",
+    width: '100%',
+    flexDirection: 'row',
   },
   myRow: {
-    justifyContent: "flex-end",
+    justifyContent: 'flex-end',
   },
   botRow: {
-    justifyContent: "flex-start",
+    justifyContent: 'flex-start',
   },
   bubble: {
-    maxWidth: "78%",
+    maxWidth: '78%',
     borderRadius: 12,
     padding: 10,
   },
@@ -430,116 +396,116 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   myBubble: {
-    backgroundColor: "#95ec69",
+    backgroundColor: '#95ec69',
   },
   botBubble: {
-    backgroundColor: "#fff",
+    backgroundColor: '#fff',
   },
   messageText: {
-    color: "#222",
+    color: '#222',
     lineHeight: 20,
   },
   messageImage: {
     width: 180,
     height: 180,
     borderRadius: 10,
-    backgroundColor: "#eee",
+    backgroundColor: '#eee',
   },
   messageVideo: {
     width: 220,
     height: 220,
     borderRadius: 10,
-    backgroundColor: "#111",
+    backgroundColor: '#111',
   },
   videoWrapper: {
     gap: 8,
   },
   videoHintBadge: {
-    position: "absolute",
+    position: 'absolute',
     right: 8,
     bottom: 8,
-    backgroundColor: "rgba(0,0,0,0.65)",
+    backgroundColor: 'rgba(0,0,0,0.65)',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 999,
   },
   videoHintText: {
-    color: "#fff",
+    color: '#fff',
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: '700',
   },
   videoMetaRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   videoDurationText: {
-    color: "#333",
-    fontWeight: "600",
+    color: '#333',
+    fontWeight: '600',
   },
   videoSaveButton: {
-    backgroundColor: "#07c160",
+    backgroundColor: '#07c160',
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 8,
   },
   videoSaveButtonText: {
-    color: "#fff",
-    fontWeight: "700",
+    color: '#fff',
+    fontWeight: '700',
     fontSize: 12,
   },
   previewMask: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.92)",
-    justifyContent: "space-between",
+    backgroundColor: 'rgba(0,0,0,0.92)',
+    justifyContent: 'space-between',
   },
   previewCloseArea: {
     flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
+    justifyContent: 'center',
+    alignItems: 'center',
     paddingHorizontal: 16,
     paddingTop: 30,
   },
   previewImage: {
-    width: "100%",
-    height: "100%",
+    width: '100%',
+    height: '100%',
   },
   previewVideo: {
-    width: "100%",
-    height: "100%",
-    backgroundColor: "#000",
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#000',
   },
   previewVideoFrame: {
     flex: 1,
     borderRadius: 12,
-    overflow: "hidden",
-    backgroundColor: "#000",
+    overflow: 'hidden',
+    backgroundColor: '#000',
   },
   videoPreviewModalRoot: {
     flex: 1,
   },
   videoPreviewBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "#000",
+    backgroundColor: '#000',
   },
   videoPreviewHeader: {
     paddingTop: 18,
     paddingHorizontal: 16,
-    alignItems: "flex-end",
+    alignItems: 'flex-end',
   },
   videoPreviewPanel: {
     flex: 1,
-    justifyContent: "space-between",
+    justifyContent: 'space-between',
   },
   videoPreviewCloseButton: {
-    backgroundColor: "rgba(255,255,255,0.22)",
+    backgroundColor: 'rgba(255,255,255,0.22)',
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 999,
   },
   videoPreviewCloseText: {
-    color: "#fff",
-    fontWeight: "700",
+    color: '#fff',
+    fontWeight: '700',
   },
   videoPreviewBody: {
     flex: 1,
@@ -549,46 +515,46 @@ const styles = StyleSheet.create({
   previewActions: {
     paddingHorizontal: 16,
     paddingBottom: 28,
-    alignItems: "center",
+    alignItems: 'center',
   },
   previewActionButton: {
     minWidth: 150,
-    backgroundColor: "#07c160",
+    backgroundColor: '#07c160',
     paddingHorizontal: 18,
     paddingVertical: 12,
     borderRadius: 999,
-    alignItems: "center",
+    alignItems: 'center',
   },
   previewActionText: {
-    color: "#fff",
-    fontWeight: "700",
+    color: '#fff',
+    fontWeight: '700',
   },
   audioCard: {
     minHeight: 38,
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   audioCardPlaying: {
     opacity: 0.85,
   },
   audioDurationText: {
-    color: "#1f1f1f",
-    fontWeight: "600",
+    color: '#1f1f1f',
+    fontWeight: '600',
     fontSize: 14,
   },
   waveContainer: {
-    flexDirection: "row",
-    alignItems: "flex-end",
+    flexDirection: 'row',
+    alignItems: 'flex-end',
     gap: 3,
     marginHorizontal: 4,
   },
   waveBar: {
     width: 3,
     borderRadius: 2,
-    backgroundColor: "#1f1f1f",
+    backgroundColor: '#1f1f1f',
   },
 });

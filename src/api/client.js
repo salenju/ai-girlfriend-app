@@ -5,19 +5,19 @@ const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL ||
   globalThis.__API_BASE_URL__ ||
   globalThis.__AUTH_API_BASE_URL__ ||
-  "";
+  '';
 
 const API_TIMEOUT_MS = Number(
-  process.env.EXPO_PUBLIC_API_TIMEOUT_MS || globalThis.__API_TIMEOUT_MS__ || 12000,
+  process.env.EXPO_PUBLIC_API_TIMEOUT_MS || globalThis.__API_TIMEOUT_MS__ || 12000
 );
 
 function buildUrl(path) {
-  const safeBase = String(API_BASE_URL || "").replace(/\/$/, "");
-  const safePath = String(path || "").startsWith("/") ? path : `/${path}`;
+  const safeBase = String(API_BASE_URL || '').replace(/\/$/, '');
+  const safePath = String(path || '').startsWith('/') ? path : `/${path}`;
 
   if (!safeBase) {
     throw new Error(
-      "未配置 API 地址：请设置 EXPO_PUBLIC_API_BASE_URL（或 globalThis.__API_BASE_URL__）",
+      '未配置 API 地址：请设置 EXPO_PUBLIC_API_BASE_URL（或 globalThis.__API_BASE_URL__）'
     );
   }
 
@@ -35,9 +35,9 @@ function withTimeout(timeoutMs) {
 }
 
 async function parsePayload(response) {
-  const contentType = response.headers.get("content-type") || "";
+  const contentType = response.headers.get('content-type') || '';
 
-  if (contentType.includes("application/json")) {
+  if (contentType.includes('application/json')) {
     return response.json();
   }
 
@@ -61,7 +61,7 @@ function normalizeErrorMessage(payload, status) {
  */
 export async function requestJson({
   path,
-  method = "GET",
+  method = 'GET',
   body,
   token,
   headers = {},
@@ -73,7 +73,7 @@ export async function requestJson({
     const response = await fetch(buildUrl(path), {
       method,
       headers: {
-        "Content-Type": "application/json",
+        'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...headers,
       },
@@ -98,11 +98,11 @@ export async function requestJson({
       status: response.status,
     };
   } catch (error) {
-    const isAbort = error?.name === "AbortError";
+    const isAbort = error?.name === 'AbortError';
 
     return {
       ok: false,
-      message: isAbort ? "请求超时，请稍后重试" : error?.message || "网络请求失败",
+      message: isAbort ? '请求超时，请稍后重试' : error?.message || '网络请求失败',
       payload: null,
       status: 0,
     };

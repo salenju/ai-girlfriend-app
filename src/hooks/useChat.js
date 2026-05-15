@@ -1,33 +1,33 @@
-import { Audio } from "expo-av";
-import * as ImagePicker from "expo-image-picker";
-import { useEffect, useRef, useState } from "react";
+import { Audio } from 'expo-av';
+import * as ImagePicker from 'expo-image-picker';
+import { useEffect, useRef, useState } from 'react';
 import {
   enqueueLocalMessage,
   flushOutboxQueue,
   initLocalChatStorage,
   listMessagesByConversation,
   markOutboxSent,
-} from "../services/chat/localChatStorage";
+} from '../services/chat/localChatStorage';
 
 export const BOT_USER = {
-  id: "bot-1",
-  username: "小微",
+  id: 'bot-1',
+  username: '小微',
 };
 
 const OUTBOX_POLL_INTERVAL_MS = 2500;
 const MESSAGE_PAGE_SIZE = 200;
-const MEDIA_PAYLOAD_PREFIX = "__LOCAL_MEDIA__:";
+const MEDIA_PAYLOAD_PREFIX = '__LOCAL_MEDIA__:';
 
 // Phase 2: realtime + seq incremental sync configs
 // 可通过全局变量注入：globalThis.__CHAT_WS_URL__ / globalThis.__CHAT_SYNC_HTTP_URL__
-const CHAT_WS_URL = globalThis.__CHAT_WS_URL__ || "";
-const CHAT_SYNC_HTTP_URL = globalThis.__CHAT_SYNC_HTTP_URL__ || "";
+const CHAT_WS_URL = globalThis.__CHAT_WS_URL__ || '';
+const CHAT_SYNC_HTTP_URL = globalThis.__CHAT_SYNC_HTTP_URL__ || '';
 const SYNC_PULL_INTERVAL_MS = 12_000;
 const WS_RECONNECT_BASE_MS = 1200;
 const WS_RECONNECT_MAX_MS = 10_000;
 const WS_REQUEST_TIMEOUT_MS = 12_000;
 
-function createId(prefix = "msg") {
+function createId(prefix = 'msg') {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
 }
 
@@ -55,7 +55,7 @@ function serializeMediaPayload(payload) {
 }
 
 function parseMediaPayload(text) {
-  if (typeof text !== "string" || !text.startsWith(MEDIA_PAYLOAD_PREFIX)) {
+  if (typeof text !== 'string' || !text.startsWith(MEDIA_PAYLOAD_PREFIX)) {
     return null;
   }
 
@@ -63,24 +63,24 @@ function parseMediaPayload(text) {
     const raw = text.slice(MEDIA_PAYLOAD_PREFIX.length);
     const parsed = JSON.parse(raw);
 
-    if (parsed?.type === "image" && parsed?.imageUri) {
+    if (parsed?.type === 'image' && parsed?.imageUri) {
       return {
-        type: "image",
+        type: 'image',
         imageUri: parsed.imageUri,
       };
     }
 
-    if (parsed?.type === "audio" && parsed?.audioUri) {
+    if (parsed?.type === 'audio' && parsed?.audioUri) {
       return {
-        type: "audio",
+        type: 'audio',
         audioUri: parsed.audioUri,
         durationMillis: Number(parsed.durationMillis || 0),
       };
     }
 
-    if (parsed?.type === "video" && parsed?.videoUri) {
+    if (parsed?.type === 'video' && parsed?.videoUri) {
       return {
-        type: "video",
+        type: 'video',
         videoUri: parsed.videoUri,
         durationMillis: Number(parsed.durationMillis || 0),
       };
@@ -93,7 +93,7 @@ function parseMediaPayload(text) {
 }
 
 function mapStoredRowToUi(row) {
-  const media = parseMediaPayload(row.text || "");
+  const media = parseMediaPayload(row.text || '');
   const seq = Number(row?.meta?.seq);
 
   const base = {
@@ -105,27 +105,27 @@ function mapStoredRowToUi(row) {
     serverId: row.serverId || row?.meta?.serverId || null,
   };
 
-  if (media?.type === "image") {
+  if (media?.type === 'image') {
     return {
       ...base,
-      type: "image",
+      type: 'image',
       imageUri: media.imageUri,
     };
   }
 
-  if (media?.type === "audio") {
+  if (media?.type === 'audio') {
     return {
       ...base,
-      type: "audio",
+      type: 'audio',
       audioUri: media.audioUri,
       durationMillis: media.durationMillis,
     };
   }
 
-  if (media?.type === "video") {
+  if (media?.type === 'video') {
     return {
       ...base,
-      type: "video",
+      type: 'video',
       videoUri: media.videoUri,
       durationMillis: media.durationMillis,
     };
@@ -133,15 +133,15 @@ function mapStoredRowToUi(row) {
 
   return {
     ...base,
-    type: "text",
-    text: row.text || "",
+    type: 'text',
+    text: row.text || '',
   };
 }
 
 function createBotWelcomeMessage(username) {
   return {
-    id: createId("welcome"),
-    type: "text",
+    id: createId('welcome'),
+    type: 'text',
     text: `欢迎你，${username}！现在可以开始聊天了。`,
     senderId: BOT_USER.id,
     createdAt: new Date().toISOString(),
@@ -150,14 +150,14 @@ function createBotWelcomeMessage(username) {
 }
 
 async function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 async function sendTaskMock(task) {
   await delay(150);
-  const text = task?.payload?.text || "";
-  if (typeof text === "string" && text.includes("#fail")) {
-    throw new Error("模拟发送失败：命中 #fail 标记");
+  const text = task?.payload?.text || '';
+  if (typeof text === 'string' && text.includes('#fail')) {
+    throw new Error('模拟发送失败：命中 #fail 标记');
   }
 
   return {
@@ -167,45 +167,47 @@ async function sendTaskMock(task) {
 }
 
 function normalizeRemoteMessage(msg) {
-  if (!msg || typeof msg !== "object") return null;
+  if (!msg || typeof msg !== 'object') return null;
 
   const serverId = msg.serverId || msg.id || null;
   const clientId =
     msg.clientId ||
-    (serverId ? `srv-${serverId}` : Number.isFinite(Number(msg.seq))
-      ? `seq-${msg.seq}`
-      : createId("remote"));
+    (serverId
+      ? `srv-${serverId}`
+      : Number.isFinite(Number(msg.seq))
+        ? `seq-${msg.seq}`
+        : createId('remote'));
 
-  const type = msg.type || "text";
+  const type = msg.type || 'text';
   const senderId = msg.senderId || BOT_USER.id;
   const seq = Number(msg.seq);
   const createdAt = msg.createdAtServer || msg.createdAt || new Date().toISOString();
 
-  let text = "";
-  let previewText = "";
+  let text = '';
+  let previewText = '';
 
-  if (type === "image") {
-    const imageUri = msg.imageUri || msg.url || msg.remoteUrl || "";
-    text = serializeMediaPayload({ type: "image", imageUri });
-    previewText = "[图片]";
-  } else if (type === "audio") {
-    const audioUri = msg.audioUri || msg.url || msg.remoteUrl || "";
+  if (type === 'image') {
+    const imageUri = msg.imageUri || msg.url || msg.remoteUrl || '';
+    text = serializeMediaPayload({ type: 'image', imageUri });
+    previewText = '[图片]';
+  } else if (type === 'audio') {
+    const audioUri = msg.audioUri || msg.url || msg.remoteUrl || '';
     text = serializeMediaPayload({
-      type: "audio",
+      type: 'audio',
       audioUri,
       durationMillis: Number(msg.durationMillis || 0),
     });
-    previewText = "[语音]";
-  } else if (type === "video") {
-    const videoUri = msg.videoUri || msg.url || msg.remoteUrl || "";
+    previewText = '[语音]';
+  } else if (type === 'video') {
+    const videoUri = msg.videoUri || msg.url || msg.remoteUrl || '';
     text = serializeMediaPayload({
-      type: "video",
+      type: 'video',
       videoUri,
       durationMillis: Number(msg.durationMillis || 0),
     });
-    previewText = "[视频]";
+    previewText = '[视频]';
   } else {
-    text = String(msg.text || "");
+    text = String(msg.text || '');
     previewText = text;
   }
 
@@ -234,7 +236,7 @@ function parseSyncMessagesPayload(payload) {
 
 export function useChat(currentUser) {
   const [messages, setMessages] = useState([]);
-  const [inputText, setInputText] = useState("");
+  const [inputText, setInputText] = useState('');
   const [recording, setRecording] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [playingMessageId, setPlayingMessageId] = useState(null);
@@ -254,8 +256,8 @@ export function useChat(currentUser) {
   const isWsConnectedRef = useRef(false);
   const pendingWsRequestsRef = useRef(new Map());
 
-  const pushMessage = (message) => {
-    setMessages((prev) => sortBySeqThenTime([...prev, message]));
+  const pushMessage = message => {
+    setMessages(prev => sortBySeqThenTime([...prev, message]));
 
     const seq = Number(message?.seq);
     if (Number.isFinite(seq)) {
@@ -283,15 +285,15 @@ export function useChat(currentUser) {
     }
     lastSeqRef.current = nextMaxSeq;
 
-    setMessages((prev) => {
-      const volatileMessages = prev.filter((item) => item.__volatile === true);
+    setMessages(prev => {
+      const volatileMessages = prev.filter(item => item.__volatile === true);
       return sortBySeqThenTime([...persistentMessages, ...volatileMessages]);
     });
 
     return persistentMessages.length;
   };
 
-  const persistRemoteMessage = async (rawMessage) => {
+  const persistRemoteMessage = async rawMessage => {
     const normalized = normalizeRemoteMessage(rawMessage);
     const conversationId = conversationIdRef.current;
 
@@ -330,13 +332,13 @@ export function useChat(currentUser) {
     return true;
   };
 
-  const handleRealtimeEvent = async (event) => {
-    if (!event || typeof event !== "object") return;
+  const handleRealtimeEvent = async event => {
+    if (!event || typeof event !== 'object') return;
 
-    const type = event.type || event.event || "";
+    const type = event.type || event.event || '';
 
     // RPC acks
-    if ((type === "message:ack" || type === "ack") && event.requestId) {
+    if ((type === 'message:ack' || type === 'ack') && event.requestId) {
       const pending = pendingWsRequestsRef.current.get(event.requestId);
       if (pending) {
         clearTimeout(pending.timer);
@@ -346,22 +348,22 @@ export function useChat(currentUser) {
       return;
     }
 
-    if ((type === "error" || type === "message:error") && event.requestId) {
+    if ((type === 'error' || type === 'message:error') && event.requestId) {
       const pending = pendingWsRequestsRef.current.get(event.requestId);
       if (pending) {
         clearTimeout(pending.timer);
         pendingWsRequestsRef.current.delete(event.requestId);
-        pending.reject(new Error(event.message || "ws request failed"));
+        pending.reject(new Error(event.message || 'ws request failed'));
       }
       return;
     }
 
     // realtime message push
     if (
-      type === "message:new" ||
-      type === "chat:message" ||
-      type === "message" ||
-      type === "sync:message"
+      type === 'message:new' ||
+      type === 'chat:message' ||
+      type === 'message' ||
+      type === 'sync:message'
     ) {
       const payload = event.payload || event.data || event.message || event;
       const list = Array.isArray(payload) ? payload : [payload];
@@ -379,7 +381,7 @@ export function useChat(currentUser) {
     }
 
     // server can proactively push a sync batch
-    if (type === "sync:batch" || type === "sync:result") {
+    if (type === 'sync:batch' || type === 'sync:result') {
       const list = parseSyncMessagesPayload(event.payload || event.data || {});
       let changed = false;
       for (const item of list) {
@@ -392,15 +394,15 @@ export function useChat(currentUser) {
     }
   };
 
-  const wsRequest = async (payload) => {
+  const wsRequest = async payload => {
     const ws = wsRef.current;
     const conversationId = conversationIdRef.current;
 
     if (!ws || ws.readyState !== WebSocket.OPEN || !conversationId) {
-      throw new Error("ws not ready");
+      throw new Error('ws not ready');
     }
 
-    const requestId = createId("wsreq");
+    const requestId = createId('wsreq');
 
     const requestBody = {
       requestId,
@@ -412,7 +414,7 @@ export function useChat(currentUser) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         pendingWsRequestsRef.current.delete(requestId);
-        reject(new Error("ws request timeout"));
+        reject(new Error('ws request timeout'));
       }, WS_REQUEST_TIMEOUT_MS);
 
       pendingWsRequestsRef.current.set(requestId, { resolve, reject, timer });
@@ -427,15 +429,15 @@ export function useChat(currentUser) {
     });
   };
 
-  const sendTaskRemoteFirst = async (task) => {
+  const sendTaskRemoteFirst = async task => {
     const payload = task?.payload || {};
 
     if (isWsConnectedRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
       const ack = await wsRequest({
-        type: "message:send",
+        type: 'message:send',
         data: {
           clientId: task.clientId,
-          type: payload.type || "text",
+          type: payload.type || 'text',
           text: payload.text,
           senderId: payload.senderId,
           createdAtClient: payload.createdAtClient,
@@ -451,16 +453,16 @@ export function useChat(currentUser) {
     }
 
     if (CHAT_SYNC_HTTP_URL) {
-      const response = await fetch(`${CHAT_SYNC_HTTP_URL.replace(/\/$/, "")}/send`, {
-        method: "POST",
+      const response = await fetch(`${CHAT_SYNC_HTTP_URL.replace(/\/$/, '')}/send`, {
+        method: 'POST',
         headers: {
-          "Content-Type": "application/json",
+          'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           conversationId: task.conversationId,
           userId: currentUser?.id,
           clientId: task.clientId,
-          type: payload.type || "text",
+          type: payload.type || 'text',
           text: payload.text,
           senderId: payload.senderId,
           createdAtClient: payload.createdAtClient,
@@ -505,8 +507,8 @@ export function useChat(currentUser) {
           await enqueueLocalMessage({
             conversationId: task.conversationId,
             senderId: task.payload?.senderId || currentUser?.id || BOT_USER.id,
-            text: task.payload?.text || "",
-            messageType: task.payload?.type || "text",
+            text: task.payload?.text || '',
+            messageType: task.payload?.type || 'text',
             previewText: null,
             clientId: task.clientId,
             createdAtClient: task.payload?.createdAtClient || new Date().toISOString(),
@@ -545,15 +547,15 @@ export function useChat(currentUser) {
 
     isSyncingRef.current = true;
     try {
-      const base = CHAT_SYNC_HTTP_URL.replace(/\/$/, "");
+      const base = CHAT_SYNC_HTTP_URL.replace(/\/$/, '');
       const url = `${base}/sync?conversationId=${encodeURIComponent(
-        conversationIdRef.current,
+        conversationIdRef.current
       )}&afterSeq=${encodeURIComponent(String(lastSeqRef.current || 0))}`;
 
       const response = await fetch(url, {
-        method: "GET",
+        method: 'GET',
         headers: {
-          Accept: "application/json",
+          Accept: 'application/json',
         },
       });
 
@@ -584,7 +586,7 @@ export function useChat(currentUser) {
     const pendingEntries = [...pendingWsRequestsRef.current.entries()];
     for (const [, pending] of pendingEntries) {
       clearTimeout(pending.timer);
-      pending.reject(new Error("ws disconnected"));
+      pending.reject(new Error('ws disconnected'));
     }
     pendingWsRequestsRef.current.clear();
   };
@@ -611,7 +613,7 @@ export function useChat(currentUser) {
     wsReconnectAttemptRef.current += 1;
     const delayMs = Math.min(
       WS_RECONNECT_BASE_MS * 2 ** (wsReconnectAttemptRef.current - 1),
-      WS_RECONNECT_MAX_MS,
+      WS_RECONNECT_MAX_MS
     );
 
     reconnectTimerRef.current = setTimeout(() => {
@@ -639,21 +641,21 @@ export function useChat(currentUser) {
         try {
           ws.send(
             JSON.stringify({
-              type: "chat:join",
+              type: 'chat:join',
               conversationId: conversationIdRef.current,
               userId: currentUser.id,
               afterSeq: lastSeqRef.current || 0,
-            }),
+            })
           );
         } catch {
           // ignore join send errors
         }
       };
 
-      ws.onmessage = (event) => {
+      ws.onmessage = event => {
         let parsed = null;
         try {
-          parsed = JSON.parse(event?.data || "{}");
+          parsed = JSON.parse(event?.data || '{}');
         } catch {
           return;
         }
@@ -696,9 +698,7 @@ export function useChat(currentUser) {
       if (cancelled) return;
 
       if (messageCount === 0) {
-        setMessages([
-          createBotWelcomeMessage(currentUser.username || currentUser.id),
-        ]);
+        setMessages([createBotWelcomeMessage(currentUser.username || currentUser.id)]);
       }
 
       await flushOutboxOnce();
@@ -759,14 +759,14 @@ export function useChat(currentUser) {
     }
 
     const draft = text;
-    setInputText("");
+    setInputText('');
 
     try {
       await enqueueLocalMessage({
         conversationId: conversationIdRef.current,
         senderId: currentUser.id,
         text: draft,
-        messageType: "text",
+        messageType: 'text',
         previewText: draft,
         unreadDelta: 0,
       });
@@ -780,12 +780,12 @@ export function useChat(currentUser) {
 
   const pickImage = async () => {
     if (!currentUser || !conversationIdRef.current) {
-      return { ok: false, message: "请先登录" };
+      return { ok: false, message: '请先登录' };
     }
 
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
-      return { ok: false, message: "请允许访问相册后再发送图片" };
+      return { ok: false, message: '请允许访问相册后再发送图片' };
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -800,7 +800,7 @@ export function useChat(currentUser) {
 
     const asset = result.assets?.[0];
     if (!asset?.uri) {
-      return { ok: false, message: "未读取到图片" };
+      return { ok: false, message: '未读取到图片' };
     }
 
     try {
@@ -808,11 +808,11 @@ export function useChat(currentUser) {
         conversationId: conversationIdRef.current,
         senderId: currentUser.id,
         text: serializeMediaPayload({
-          type: "image",
+          type: 'image',
           imageUri: asset.uri,
         }),
-        messageType: "image",
-        previewText: "[图片]",
+        messageType: 'image',
+        previewText: '[图片]',
         unreadDelta: 0,
       });
 
@@ -820,18 +820,18 @@ export function useChat(currentUser) {
       await flushOutboxOnce();
       return { ok: true };
     } catch {
-      return { ok: false, message: "图片发送失败，请稍后重试" };
+      return { ok: false, message: '图片发送失败，请稍后重试' };
     }
   };
 
   const pickVideo = async () => {
     if (!currentUser || !conversationIdRef.current) {
-      return { ok: false, message: "请先登录" };
+      return { ok: false, message: '请先登录' };
     }
 
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
-      return { ok: false, message: "请允许访问相册后再发送视频" };
+      return { ok: false, message: '请允许访问相册后再发送视频' };
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -846,7 +846,7 @@ export function useChat(currentUser) {
 
     const asset = result.assets?.[0];
     if (!asset?.uri) {
-      return { ok: false, message: "未读取到视频" };
+      return { ok: false, message: '未读取到视频' };
     }
 
     try {
@@ -854,12 +854,12 @@ export function useChat(currentUser) {
         conversationId: conversationIdRef.current,
         senderId: currentUser.id,
         text: serializeMediaPayload({
-          type: "video",
+          type: 'video',
           videoUri: asset.uri,
           durationMillis: Number(asset.duration || 0),
         }),
-        messageType: "video",
-        previewText: "[视频]",
+        messageType: 'video',
+        previewText: '[视频]',
         unreadDelta: 0,
       });
 
@@ -867,18 +867,18 @@ export function useChat(currentUser) {
       await flushOutboxOnce();
       return { ok: true };
     } catch {
-      return { ok: false, message: "视频发送失败，请稍后重试" };
+      return { ok: false, message: '视频发送失败，请稍后重试' };
     }
   };
 
   const startRecording = async () => {
     if (!currentUser) {
-      return { ok: false, message: "请先登录" };
+      return { ok: false, message: '请先登录' };
     }
 
     const permission = await Audio.requestPermissionsAsync();
     if (!permission.granted) {
-      return { ok: false, message: "请允许麦克风权限后再录音" };
+      return { ok: false, message: '请允许麦克风权限后再录音' };
     }
 
     await Audio.setAudioModeAsync({
@@ -887,9 +887,7 @@ export function useChat(currentUser) {
     });
 
     const nextRecording = new Audio.Recording();
-    await nextRecording.prepareToRecordAsync(
-      Audio.RecordingOptionsPresets.HIGH_QUALITY,
-    );
+    await nextRecording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
     await nextRecording.startAsync();
 
     setRecording(nextRecording);
@@ -900,7 +898,7 @@ export function useChat(currentUser) {
 
   const stopRecording = async () => {
     if (!recording || !currentUser || !conversationIdRef.current) {
-      return { ok: false, message: "当前没有录音" };
+      return { ok: false, message: '当前没有录音' };
     }
 
     await recording.stopAndUnloadAsync();
@@ -918,12 +916,12 @@ export function useChat(currentUser) {
           conversationId: conversationIdRef.current,
           senderId: currentUser.id,
           text: serializeMediaPayload({
-            type: "audio",
+            type: 'audio',
             audioUri: uri,
             durationMillis: status.durationMillis ?? 0,
           }),
-          messageType: "audio",
-          previewText: "[语音]",
+          messageType: 'audio',
+          previewText: '[语音]',
           unreadDelta: 0,
         });
 
@@ -932,7 +930,7 @@ export function useChat(currentUser) {
       } catch {
         setRecording(null);
         setIsRecording(false);
-        return { ok: false, message: "语音发送失败，请稍后重试" };
+        return { ok: false, message: '语音发送失败，请稍后重试' };
       }
     }
 
@@ -955,12 +953,9 @@ export function useChat(currentUser) {
       soundRef.current = null;
     }
 
-    const { sound } = await Audio.Sound.createAsync(
-      { uri },
-      { shouldPlay: true },
-    );
+    const { sound } = await Audio.Sound.createAsync({ uri }, { shouldPlay: true });
 
-    sound.setOnPlaybackStatusUpdate(async (playbackStatus) => {
+    sound.setOnPlaybackStatusUpdate(async playbackStatus => {
       if (playbackStatus.didJustFinish) {
         await sound.unloadAsync();
         if (soundRef.current === sound) {
@@ -1025,7 +1020,7 @@ export function useChat(currentUser) {
     stopRecording,
     togglePlayAudio,
     cleanupMedia,
-    appendBotWelcome: (username) => {
+    appendBotWelcome: username => {
       pushMessage(createBotWelcomeMessage(username));
     },
   };
