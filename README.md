@@ -6,11 +6,36 @@
 pnpm install
 ```
 
-2. 启动项目
+2. 配置环境变量
+
+复制示例配置并填写你的后端地址：
+
+```
+cp .env.example .env.local
+```
+
+编辑 `.env.local`：
+
+```
+EXPO_PUBLIC_API_BASE_URL=https://api.example.com
+EXPO_PUBLIC_API_TIMEOUT_MS=12000
+```
+
+说明：
+- 仅 `EXPO_PUBLIC_*` 会注入到 Expo 客户端代码中
+- 不要在 `EXPO_PUBLIC_*` 中放置密钥（如私钥、服务端 token）
+- 修改环境变量后请重启开发服务（建议清缓存）
+
+3. 启动项目（开发环境）
 ```
 pnpm run start
 ```
 
+常用启动命令：
+- 开发环境启动：`pnpm run start`（或 `pnpm run start:dev`）
+- 清缓存启动：`pnpm run start:clear`
+- 生产模式启动：`pnpm run start:prod`
+- 直接打开平台：`pnpm run android` / `pnpm run ios` / `pnpm run web`
 
 ## 构建打包
 

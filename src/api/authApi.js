@@ -3,10 +3,6 @@
 
 import { requestJson } from "./client";
 
-const AUTH_LOGIN_PATH = globalThis.__AUTH_LOGIN_PATH__ || "/auth/login";
-const AUTH_REGISTER_PATH = globalThis.__AUTH_REGISTER_PATH__ || "/auth/register";
-const AUTH_LOGOUT_PATH = globalThis.__AUTH_LOGOUT_PATH__ || "/auth/logout";
-
 export function extractUser(payload, fallbackUsername = "") {
   const raw = payload?.user || payload?.data?.user || payload?.data || payload;
 
@@ -36,7 +32,7 @@ export function extractToken(payload) {
 
 export async function loginApi({ username, password }) {
   return requestJson({
-    path: AUTH_LOGIN_PATH,
+    path: "/auth/login",
     method: "POST",
     body: { username, password },
   });
@@ -44,7 +40,7 @@ export async function loginApi({ username, password }) {
 
 export async function registerApi({ username, password }) {
   return requestJson({
-    path: AUTH_REGISTER_PATH,
+    path: "/auth/register",
     method: "POST",
     body: { username, password },
   });
@@ -52,7 +48,7 @@ export async function registerApi({ username, password }) {
 
 export async function logoutApi({ token }) {
   return requestJson({
-    path: AUTH_LOGOUT_PATH,
+    path: "/auth/logout",
     method: "POST",
     token,
   });
