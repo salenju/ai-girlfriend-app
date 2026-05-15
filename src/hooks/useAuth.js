@@ -1,18 +1,18 @@
 import { useState } from "react";
-
-function createId(prefix = "user") {
-  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
-}
+import {
+  extractToken,
+  extractUser,
+  loginApi,
+  logoutApi,
+  registerApi,
+} from "../api/authApi";
 
 export function useAuth() {
-  const [users, setUsers] = useState([
-    { id: "u-1", username: "demo", password: "123456" },
-    { id: "u-2", username: "salen", password: "738551" },
-  ]);
   const [currentUser, setCurrentUser] = useState(null);
+  const [authToken, setAuthToken] = useState("");
 
-  const register = ({ username, password }) => {
-    const safeUsername = username.trim();
+  const register = async ({ username, password }) => {
+    const safeUsername = String(username || "").trim();
 
     if (!safeUsername || !password) {
       return { ok: false, message: "请填写完整用户名和密码" };
@@ -22,47 +22,95 @@ export function useAuth() {
       return { ok: false, message: "用户名至少 2 位" };
     }
 
-    if (password.length < 6) {
+    if (String(password).length < 6) {
       return { ok: false, message: "密码至少 6 位" };
     }
 
-    const exists = users.some((item) => item.username === safeUsername);
-    if (exists) {
-      return { ok: false, message: "该用户名已存在，请直接登录" };
+    try {
+      const result = await registerApi({
+        username: safeUsername,
+        password,
+      });
+
+      if (!result.ok) {
+        return {
+          ok: false,
+          message: result.message || "注册失败",
+        };
+      }
+
+      const user = extractUser(result.payload, safeUsername);
+      const token = extractToken(result.payload);
+
+      setCurrentUser(user);
+      setAuthToken(token);
+
+      return {
+        ok: true,
+        user,
+        token,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        message: error?.message || "注册请求失败",
+      };
     }
-
-    const newUser = {
-      id: createId(),
-      username: safeUsername,
-      password,
-    };
-
-    setUsers((prev) => [...prev, newUser]);
-    setCurrentUser(newUser);
-
-    return { ok: true, user: newUser };
   };
 
-  const login = ({ username, password }) => {
-    const safeUsername = username.trim();
-    const found = users.find(
-      (item) => item.username === safeUsername && item.password === password,
-    );
+  const login = async ({ username, password }) => {
+    const safeUsername = String(username || "").trim();
 
-    if (!found) {
-      return { ok: false, message: "用户名或密码不正确" };
+    if (!safeUsername || !password) {
+      return { ok: false, message: "请填写完整用户名和密码" };
     }
 
-    setCurrentUser(found);
-    return { ok: true, user: found };
+    try {
+      const result = await loginApi({
+        username: safeUsername,
+        password,
+      });
+
+      if (!result.ok) {
+        return {
+          ok: false,
+          message: result.message || "登录失败",
+        };
+      }
+
+      const user = extractUser(result.payload, safeUsername);
+      const token = extractToken(result.payload);
+
+      setCurrentUser(user);
+      setAuthToken(token);
+
+      return {
+        ok: true,
+        user,
+        token,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        message: error?.message || "登录请求失败",
+      };
+    }
   };
 
-  const logout = () => {
-    setCurrentUser(null);
+  const logout = async () => {
+    try {
+      await logoutApi({ token: authToken });
+    } catch {
+      // 即使登出接口失败，也清理本地态
+    } finally {
+      setCurrentUser(null);
+      setAuthToken("");
+    }
   };
 
   return {
     currentUser,
+    authToken,
     register,
     login,
     logout,

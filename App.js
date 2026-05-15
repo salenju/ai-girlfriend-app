@@ -6,15 +6,15 @@ import ChatScreen from "./src/screens/ChatScreen";
 export default function App() {
   const { currentUser, login, register, logout } = useAuth();
 
-  const handleLogin = (form) => {
-    const result = login(form);
+  const handleLogin = async (form) => {
+    const result = await login(form);
     if (!result.ok) {
       Alert.alert("登录失败", result.message);
     }
   };
 
-  const handleRegister = (form) => {
-    const result = register(form);
+  const handleRegister = async (form) => {
+    const result = await register(form);
     if (!result.ok) {
       Alert.alert("注册失败", result.message);
     }
