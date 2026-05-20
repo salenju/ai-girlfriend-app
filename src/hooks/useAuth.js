@@ -65,6 +65,9 @@ export function useAuth() {
         password,
       });
 
+      console.log('====>result', result);
+      console.log('====>result', password, username);
+
       if (!result.ok) {
         return {
           ok: false,
