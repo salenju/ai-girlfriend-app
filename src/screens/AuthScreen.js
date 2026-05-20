@@ -38,7 +38,7 @@ export default function AuthScreen({ onLogin, onRegister }) {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={styles.card}>
-          <Text style={styles.title}>仿微信聊天 Demo</Text>
+          <Text style={styles.title}>知己</Text>
           <Text style={styles.subtitle}>
             {mode === 'login' ? '欢迎回来，请登录' : '创建账号，开始聊天'}
           </Text>
