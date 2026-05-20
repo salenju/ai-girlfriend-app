@@ -3,33 +3,6 @@
 
 import { requestJson } from './client';
 
-export function extractUser(payload, fallbackUsername = '') {
-  const raw = payload?.user || payload?.data?.user || payload?.data || payload;
-
-  if (!raw || typeof raw !== 'object') {
-    return {
-      id: '',
-      username: fallbackUsername,
-    };
-  }
-
-  return {
-    id: String(raw.id || raw.userId || raw.uid || ''),
-    username: String(raw.username || raw.name || fallbackUsername || ''),
-    ...raw,
-  };
-}
-
-export function extractToken(payload) {
-  return (
-    payload?.token ||
-    payload?.accessToken ||
-    payload?.data?.token ||
-    payload?.data?.accessToken ||
-    ''
-  );
-}
-
 export async function loginApi({ username, password }) {
   return requestJson({
     path: '/api/auth/login',

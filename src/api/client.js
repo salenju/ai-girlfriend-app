@@ -1,6 +1,8 @@
 // src/api/client.js
 // 通用 API 客户端（Expo / React Native）
 
+import * as SecureStore from 'expo-secure-store';
+
 const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL ||
   globalThis.__API_BASE_URL__ ||
@@ -10,6 +12,9 @@ const API_BASE_URL =
 const API_TIMEOUT_MS = Number(
   process.env.EXPO_PUBLIC_API_TIMEOUT_MS || globalThis.__API_TIMEOUT_MS__ || 12000
 );
+
+const AUTH_TOKEN_KEY = 'AUTH_TOKEN';
+let memoryAuthToken = '';
 
 function buildUrl(path) {
   const safeBase = String(API_BASE_URL || '').replace(/\/$/, '');
@@ -49,6 +54,47 @@ function normalizeErrorMessage(payload, status) {
   return payload?.message || payload?.error || `请求失败（HTTP ${status}）`;
 }
 
+function extractToken(payload) {
+  return (
+    payload?.token ||
+    payload?.accessToken ||
+    payload?.data?.token ||
+    payload?.data?.accessToken ||
+    ''
+  );
+}
+
+export async function setStoredAuthToken(token = '') {
+  const safeToken = String(token || '');
+  memoryAuthToken = safeToken;
+
+  if (!safeToken) {
+    await SecureStore.deleteItemAsync(AUTH_TOKEN_KEY);
+    return;
+  }
+
+  await SecureStore.setItemAsync(AUTH_TOKEN_KEY, safeToken);
+}
+
+export async function getStoredAuthToken() {
+  if (memoryAuthToken) {
+    return memoryAuthToken;
+  }
+
+  const token = (await SecureStore.getItemAsync(AUTH_TOKEN_KEY)) || '';
+  memoryAuthToken = token;
+  return token;
+}
+
+export async function clearStoredAuthToken() {
+  memoryAuthToken = '';
+  await SecureStore.deleteItemAsync(AUTH_TOKEN_KEY);
+}
+
+function shouldPersistAuthToken(path) {
+  return path === '/api/auth/login' || path === '/api/auth/register';
+}
+
 /**
  * requestJson
  * @param {Object} options
@@ -70,11 +116,13 @@ export async function requestJson({
   const timeout = withTimeout(Number(timeoutMs) > 0 ? Number(timeoutMs) : API_TIMEOUT_MS);
 
   try {
+    const finalToken = token || (await getStoredAuthToken());
+
     const response = await fetch(buildUrl(path), {
       method,
       headers: {
         'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(finalToken ? { Authorization: `Bearer ${finalToken}` } : {}),
         ...headers,
       },
       body: body ? JSON.stringify(body) : undefined,
@@ -90,6 +138,17 @@ export async function requestJson({
         payload,
         status: response.status,
       };
+    }
+
+    if (shouldPersistAuthToken(path)) {
+      const nextToken = extractToken(payload);
+      if (nextToken) {
+        await setStoredAuthToken(nextToken);
+      }
+    }
+
+    if (path === '/api/auth/logout') {
+      await clearStoredAuthToken();
     }
 
     return {

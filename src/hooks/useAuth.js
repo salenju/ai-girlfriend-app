@@ -1,5 +1,32 @@
 import { useState } from 'react';
-import { extractToken, extractUser, loginApi, logoutApi, registerApi } from '../api/authApi';
+import { loginApi, logoutApi, registerApi } from '../api/authApi';
+
+function extractUser(payload, fallbackUsername = '') {
+  const raw = payload?.user || payload?.data?.user || payload?.data || payload;
+
+  if (!raw || typeof raw !== 'object') {
+    return {
+      id: '',
+      username: fallbackUsername,
+    };
+  }
+
+  return {
+    id: String(raw.id || raw.userId || raw.uid || ''),
+    username: String(raw.username || raw.name || fallbackUsername || ''),
+    ...raw,
+  };
+}
+
+function extractToken(payload) {
+  return (
+    payload?.token ||
+    payload?.accessToken ||
+    payload?.data?.token ||
+    payload?.data?.accessToken ||
+    ''
+  );
+}
 
 export function useAuth() {
   const [currentUser, setCurrentUser] = useState(null);
@@ -33,8 +60,7 @@ export function useAuth() {
         };
       }
 
-      const user = extractUser(result.payload, safeUsername);
-      const token = extractToken(result.payload);
+      const { token, user } = result.payload.data;
 
       setCurrentUser(user);
       setAuthToken(token);
@@ -65,9 +91,6 @@ export function useAuth() {
         password,
       });
 
-      console.log('====>result', result);
-      console.log('====>result', password, username);
-
       if (!result.ok) {
         return {
           ok: false,
@@ -75,8 +98,8 @@ export function useAuth() {
         };
       }
 
-      const user = extractUser(result.payload, safeUsername);
-      const token = extractToken(result.payload);
+      const { token, user } = result.payload.data;
+      console.log('=====>登录成功', token, user);
 
       setCurrentUser(user);
       setAuthToken(token);

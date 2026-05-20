@@ -13,6 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { sendChatApi } from '../api/chatApi';
 import ChatInputBar from '../components/chat/ChatInputBar';
 import MessageBubble from '../components/chat/MessageBubble';
 import { useChat } from '../hooks/useChat';
@@ -98,6 +99,29 @@ export default function ChatScreen({ currentUser, onLogout }) {
     }
   };
 
+  const handleSendText = async () => {
+    const draft = inputText.trim();
+    if (!draft) {
+      return;
+    }
+
+    try {
+      let params = {
+        type: 'text',
+        content: draft,
+        mediaUrl: '',
+        generateReply: true,
+      };
+
+      console.log('====>发送消息', params);
+      await sendChatApi(params);
+
+      await sendText();
+    } catch (error) {
+      Alert.alert('发送失败', error?.message ?? '请稍后重试');
+    }
+  };
+
   const handleLogout = async () => {
     await cleanupMedia();
     onLogout();
@@ -143,7 +167,7 @@ export default function ChatScreen({ currentUser, onLogout }) {
           <ChatInputBar
             inputText={inputText}
             onChangeText={setInputText}
-            onSend={sendText}
+            onSend={handleSendText}
             isRecording={isRecording}
             onToggleRecord={handleToggleRecord}
           />
