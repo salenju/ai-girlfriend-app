@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -18,109 +18,26 @@ import ChatInputBar from '../components/chat/ChatInputBar';
 import MessageBubble from '../components/chat/MessageBubble';
 import { useChat } from '../hooks/useChat';
 
+const MESSAGE_ALIGNMENT_CONFIG = {
+  mine: 'right',
+  other: 'left',
+};
+
+function shouldRenderOnRight(item, currentUser, config = MESSAGE_ALIGNMENT_CONFIG) {
+  const itemSenderId = String(item?.senderId ?? '');
+  const currentUserId = String(currentUser?.id ?? '');
+  const isCurrentUserMessage = itemSenderId !== '' && itemSenderId === currentUserId;
+  const mineSide = config?.mine === 'left' ? 'left' : 'right';
+  const otherSide = config?.other === 'right' ? 'right' : 'left';
+  const targetSide = isCurrentUserMessage ? mineSide : otherSide;
+  return targetSide === 'right';
+}
+
 export default function ChatScreen({ currentUser, onLogout }) {
   const PageContainer = Platform.OS === 'ios' ? KeyboardAvoidingView : View;
   const pageContainerProps =
     Platform.OS === 'ios' ? { behavior: 'padding', keyboardVerticalOffset: 0 } : {};
   const [androidKeyboardHeight, setAndroidKeyboardHeight] = useState(0);
-  const [immediateReplies, setImmediateReplies] = useState([]);
-
-  const createUiReply = ({ text, createdAt, id }) => ({
-    id: String(id || `http-reply-${Date.now()}-${Math.floor(Math.random() * 100000)}`),
-    type: 'text',
-    text,
-    senderId: 'bot-1',
-    createdAt: createdAt || new Date().toISOString(),
-    status: 'sent',
-  });
-
-  const extractImmediateReplyTexts = payload => {
-    if (!payload) return [];
-
-    const normalizeItem = item => {
-      if (!item || typeof item !== 'object') return null;
-
-      const text = String(
-        // 你的接口主结构：{ role: 'assistant', content: '...' }
-        item.content || item.text || item.reply || item.message || item.answer || ''
-      ).trim();
-
-      if (!text) return null;
-
-      // 若带 role，则优先 assistant；无 role 时按通用结构处理
-      if (item.role && item.role !== 'assistant') return null;
-
-      return {
-        text,
-        createdAt: item.createdAt || item.timestamp || null,
-        id: item.id || null,
-      };
-    };
-
-    const collect = value => {
-      if (!value) return [];
-
-      if (typeof value === 'string') {
-        const text = value.trim();
-        return text ? [{ text, createdAt: null, id: null }] : [];
-      }
-
-      if (Array.isArray(value)) {
-        return value
-          .map(item => {
-            if (typeof item === 'string') {
-              const text = item.trim();
-              return text ? { text, createdAt: null, id: null } : null;
-            }
-            return normalizeItem(item);
-          })
-          .filter(Boolean);
-      }
-
-      if (typeof value === 'object') {
-        const single = normalizeItem(value);
-        return single ? [single] : [];
-      }
-
-      return [];
-    };
-
-    const candidates = [
-      payload,
-      payload.assistantMessage,
-      payload.message,
-      payload.reply,
-      payload.answer,
-      payload.content,
-      payload.messages,
-      payload.data?.assistantMessage,
-      payload.data?.message,
-      payload.data?.reply,
-      payload.data?.answer,
-      payload.data?.content,
-      payload.data?.messages,
-    ];
-
-    const result = [];
-    for (const candidate of candidates) {
-      const items = collect(candidate);
-      for (const item of items) {
-        if (!item?.text) continue;
-
-        const duplicate = result.some(
-          existing =>
-            existing.text === item.text &&
-            String(existing.createdAt || '') === String(item.createdAt || '')
-        );
-
-        if (!duplicate) {
-          result.push(item);
-        }
-      }
-    }
-
-    return result;
-  };
 
   const {
     messages,
@@ -136,15 +53,6 @@ export default function ChatScreen({ currentUser, onLogout }) {
     togglePlayAudio,
     cleanupMedia,
   } = useChat(currentUser);
-
-  const mergedMessages = useMemo(() => {
-    const list = [...messages, ...immediateReplies];
-    return list.sort((a, b) => {
-      const left = new Date(a.createdAt || 0).getTime();
-      const right = new Date(b.createdAt || 0).getTime();
-      return left - right;
-    });
-  }, [messages, immediateReplies]);
 
   useEffect(() => {
     if (Platform.OS !== 'android') {
@@ -223,22 +131,13 @@ export default function ChatScreen({ currentUser, onLogout }) {
       // 1) 本地先入列，保证用户消息立即可见
       await sendText();
 
-      // 2) 触发服务端处理（可能立即返回回复，也可能后续走 ws 推送）
+      // 2) 触发服务端处理（回复展示统一以 ws/sync 进入 messages 为准）
       const result = await sendChatApi(params);
 
-      console.log('=====>接口返回信息', result.payload);
       if (result?.ok === false) {
         Alert.alert('发送失败', result.message || '请稍后重试');
         return;
       }
-
-      // 3) 兼容“立即回复”场景：直接落到列表
-      const assistantMessage = result?.payload?.data?.assistantMessage;
-      const replyItems = extractImmediateReplyTexts(assistantMessage || result?.payload);
-      if (replyItems.length > 0) {
-        setImmediateReplies(prev => [...prev, ...replyItems.map(createUiReply)]);
-      }
-      // 4) 若无立即回复，保持静默，等待 useChat 内的 ws/sync 推送
     } catch (error) {
       Alert.alert('发送失败', error?.message ?? '请稍后重试');
     }
@@ -260,17 +159,17 @@ export default function ChatScreen({ currentUser, onLogout }) {
         </View>
 
         <FlatList
-          data={mergedMessages}
+          data={messages}
           keyExtractor={item => String(item.id || `${item.senderId}-${item.createdAt}`)}
           contentContainerStyle={styles.listContent}
           keyboardShouldPersistTaps='handled'
           keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
           renderItem={({ item }) => {
-            const isMine = item.senderId === currentUser?.id;
+            const bubbleOnRight = shouldRenderOnRight(item, currentUser);
             return (
               <MessageBubble
                 item={item}
-                isMine={isMine}
+                isMine={bubbleOnRight}
                 isPlaying={playingMessageId === item.id}
                 onPlayAudio={handlePlayAudio}
               />
