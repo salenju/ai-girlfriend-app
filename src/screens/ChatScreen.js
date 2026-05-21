@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -23,6 +23,128 @@ export default function ChatScreen({ currentUser, onLogout }) {
   const pageContainerProps =
     Platform.OS === 'ios' ? { behavior: 'padding', keyboardVerticalOffset: 0 } : {};
   const [androidKeyboardHeight, setAndroidKeyboardHeight] = useState(0);
+  const [immediateReplies, setImmediateReplies] = useState([]);
+
+  const createUiReply = ({ text, createdAt, id }) => ({
+    id: String(id || `http-reply-${Date.now()}-${Math.floor(Math.random() * 100000)}`),
+    type: 'text',
+    text,
+    senderId: 'bot-1',
+    createdAt: createdAt || new Date().toISOString(),
+    status: 'sent',
+  });
+
+  const extractImmediateReplyTexts = payload => {
+    if (!payload) return [];
+
+    const normalizeItem = item => {
+      if (!item || typeof item !== 'object') return null;
+
+      const text = String(
+        // 你的接口主结构：{ role: 'assistant', content: '...' }
+        item.content || item.text || item.reply || item.message || item.answer || ''
+      ).trim();
+
+      if (!text) return null;
+
+      // 若带 role，则优先 assistant；无 role 时按通用结构处理
+      if (item.role && item.role !== 'assistant') return null;
+
+      return {
+        text,
+        createdAt: item.createdAt || item.timestamp || null,
+        id: item.id || null,
+      };
+    };
+
+    const collect = value => {
+      if (!value) return [];
+
+      if (typeof value === 'string') {
+        const text = value.trim();
+        return text ? [{ text, createdAt: null, id: null }] : [];
+      }
+
+      if (Array.isArray(value)) {
+        return value
+          .map(item => {
+            if (typeof item === 'string') {
+              const text = item.trim();
+              return text ? { text, createdAt: null, id: null } : null;
+            }
+            return normalizeItem(item);
+          })
+          .filter(Boolean);
+      }
+
+      if (typeof value === 'object') {
+        const single = normalizeItem(value);
+        return single ? [single] : [];
+      }
+
+      return [];
+    };
+
+    const candidates = [
+      payload,
+      payload.assistantMessage,
+      payload.message,
+      payload.reply,
+      payload.answer,
+      payload.content,
+      payload.messages,
+      payload.data?.assistantMessage,
+      payload.data?.message,
+      payload.data?.reply,
+      payload.data?.answer,
+      payload.data?.content,
+      payload.data?.messages,
+    ];
+
+    const result = [];
+    for (const candidate of candidates) {
+      const items = collect(candidate);
+      for (const item of items) {
+        if (!item?.text) continue;
+
+        const duplicate = result.some(
+          existing =>
+            existing.text === item.text &&
+            String(existing.createdAt || '') === String(item.createdAt || '')
+        );
+
+        if (!duplicate) {
+          result.push(item);
+        }
+      }
+    }
+
+    return result;
+  };
+
+  const {
+    messages,
+    inputText,
+    setInputText,
+    isRecording,
+    playingMessageId,
+    sendText,
+    pickImage,
+    pickVideo,
+    startRecording,
+    stopRecording,
+    togglePlayAudio,
+    cleanupMedia,
+  } = useChat(currentUser);
+
+  const mergedMessages = useMemo(() => {
+    const list = [...messages, ...immediateReplies];
+    return list.sort((a, b) => {
+      const left = new Date(a.createdAt || 0).getTime();
+      const right = new Date(b.createdAt || 0).getTime();
+      return left - right;
+    });
+  }, [messages, immediateReplies]);
 
   useEffect(() => {
     if (Platform.OS !== 'android') {
@@ -42,21 +164,6 @@ export default function ChatScreen({ currentUser, onLogout }) {
       hideSub.remove();
     };
   }, []);
-
-  const {
-    messages,
-    inputText,
-    setInputText,
-    isRecording,
-    playingMessageId,
-    sendText,
-    pickImage,
-    pickVideo,
-    startRecording,
-    stopRecording,
-    togglePlayAudio,
-    cleanupMedia,
-  } = useChat(currentUser);
 
   const handlePickImage = async () => {
     try {
@@ -106,17 +213,32 @@ export default function ChatScreen({ currentUser, onLogout }) {
     }
 
     try {
-      let params = {
+      const params = {
         type: 'text',
         content: draft,
         mediaUrl: '',
         generateReply: true,
       };
 
-      console.log('====>发送消息', params);
-      await sendChatApi(params);
-
+      // 1) 本地先入列，保证用户消息立即可见
       await sendText();
+
+      // 2) 触发服务端处理（可能立即返回回复，也可能后续走 ws 推送）
+      const result = await sendChatApi(params);
+
+      console.log('=====>接口返回信息', result.payload);
+      if (result?.ok === false) {
+        Alert.alert('发送失败', result.message || '请稍后重试');
+        return;
+      }
+
+      // 3) 兼容“立即回复”场景：直接落到列表
+      const assistantMessage = result?.payload?.data?.assistantMessage;
+      const replyItems = extractImmediateReplyTexts(assistantMessage || result?.payload);
+      if (replyItems.length > 0) {
+        setImmediateReplies(prev => [...prev, ...replyItems.map(createUiReply)]);
+      }
+      // 4) 若无立即回复，保持静默，等待 useChat 内的 ws/sync 推送
     } catch (error) {
       Alert.alert('发送失败', error?.message ?? '请稍后重试');
     }
@@ -138,8 +260,8 @@ export default function ChatScreen({ currentUser, onLogout }) {
         </View>
 
         <FlatList
-          data={messages}
-          keyExtractor={item => item.id}
+          data={mergedMessages}
+          keyExtractor={item => String(item.id || `${item.senderId}-${item.createdAt}`)}
           contentContainerStyle={styles.listContent}
           keyboardShouldPersistTaps='handled'
           keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
