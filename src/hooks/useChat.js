@@ -187,11 +187,11 @@ function normalizeRemoteMessage(msg) {
   let previewText = '';
 
   if (type === 'image') {
-    const imageUri = msg.imageUri || msg.url || msg.remoteUrl || '';
+    const imageUri = msg.imageUri || msg.url || msg.remoteUrl || msg.mediaUrl || '';
     text = serializeMediaPayload({ type: 'image', imageUri });
     previewText = '[图片]';
   } else if (type === 'audio') {
-    const audioUri = msg.audioUri || msg.url || msg.remoteUrl || '';
+    const audioUri = msg.audioUri || msg.url || msg.remoteUrl || msg.mediaUrl || '';
     text = serializeMediaPayload({
       type: 'audio',
       audioUri,
@@ -199,7 +199,7 @@ function normalizeRemoteMessage(msg) {
     });
     previewText = '[语音]';
   } else if (type === 'video') {
-    const videoUri = msg.videoUri || msg.url || msg.remoteUrl || '';
+    const videoUri = msg.videoUri || msg.url || msg.remoteUrl || msg.mediaUrl || '';
     text = serializeMediaPayload({
       type: 'video',
       videoUri,
