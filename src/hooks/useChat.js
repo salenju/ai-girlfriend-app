@@ -1,6 +1,7 @@
 import { Audio } from 'expo-av';
 import * as ImagePicker from 'expo-image-picker';
 import { useEffect, useRef, useState } from 'react';
+import { sendChatApi, uploadImageApi } from '../api/chatApi';
 import {
   enqueueLocalMessage,
   flushOutboxQueue,
@@ -804,12 +805,14 @@ export function useChat(currentUser) {
     }
 
     try {
+      const remoteUrl = await uploadImageApi(asset.uri);
+
       await enqueueLocalMessage({
         conversationId: conversationIdRef.current,
         senderId: currentUser.id,
         text: serializeMediaPayload({
           type: 'image',
-          imageUri: asset.uri,
+          imageUri: remoteUrl,
         }),
         messageType: 'image',
         previewText: '[图片]',
@@ -817,10 +820,17 @@ export function useChat(currentUser) {
       });
 
       await syncMessagesFromStorage();
-      await flushOutboxOnce();
+
+      await sendChatApi({
+        type: 'image',
+        content: '',
+        mediaUrl: remoteUrl,
+        generateReply: true,
+      });
+
       return { ok: true };
-    } catch {
-      return { ok: false, message: '图片发送失败，请稍后重试' };
+    } catch (error) {
+      return { ok: false, message: error?.message || '图片发送失败，请稍后重试' };
     }
   };
 
