@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "知己",
-    "slug": "知己",
+    "slug": "ai-girlfriend-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -28,8 +28,7 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.judengcai.aigirlfriendapp",
-      "usesCleartextTraffic": true
+      "package": "com.judengcai.aigirlfriendapp"
     },
     "web": {
       "favicon": "./assets/favicon.png"

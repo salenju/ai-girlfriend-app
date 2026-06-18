@@ -1,6 +1,6 @@
-import { Video } from 'expo-av';
+import { createVideoPlayer, VideoView } from 'expo-video';
 import * as MediaLibrary from 'expo-media-library';
-import { useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
@@ -32,14 +32,36 @@ function formatVideoDuration(durationMillis = 0) {
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
+function InlineVideo({ videoUri, style }) {
+  const [player] = useState(() => createVideoPlayer(videoUri));
+
+  useEffect(() => {
+    return () => {
+      player.release();
+    };
+  }, [player]);
+
+  return <VideoView player={player} style={style} contentFit='cover' nativeControls={false} />;
+}
+
+function PreviewVideo({ videoUri, style }) {
+  const [player] = useState(() => createVideoPlayer(videoUri));
+
+  useEffect(() => {
+    return () => {
+      player.release();
+    };
+  }, [player]);
+
+  return <VideoView player={player} style={style} contentFit='contain' nativeControls />;
+}
+
 export default function MessageBubble({ item, isMine, isPlaying, onPlayAudio }) {
   const [previewVisible, setPreviewVisible] = useState(false);
   const [videoPreviewVisible, setVideoPreviewVisible] = useState(false);
   const [savingImage, setSavingImage] = useState(false);
   const [savingVideo, setSavingVideo] = useState(false);
 
-  const inlineVideoRef = useRef(null);
-  const previewVideoRef = useRef(null);
   const videoSwipeX = useRef(new Animated.Value(0)).current;
   const videoBackdropOpacity = videoSwipeX.interpolate({
     inputRange: [-SCREEN_WIDTH, 0, SCREEN_WIDTH],
@@ -47,35 +69,23 @@ export default function MessageBubble({ item, isMine, isPlaying, onPlayAudio }) 
     extrapolate: 'clamp',
   });
 
-  const closeVideoPreview = () => {
+  const closeVideoPreview = useCallback(() => {
     setVideoPreviewVisible(false);
     videoSwipeX.setValue(0);
-  };
+  }, [videoSwipeX]);
 
-  const animateVideoPreviewClose = (direction = 1) => {
-    Animated.timing(videoSwipeX, {
-      toValue: direction * SCREEN_WIDTH,
-      duration: 160,
-      useNativeDriver: true,
-    }).start(() => {
-      closeVideoPreview();
-    });
-  };
-
-  const resetVideoToStartWhenFinished = (status, videoRef) => {
-    if (!status?.isLoaded || !status.didJustFinish) {
-      return;
-    }
-
-    videoRef.current
-      ?.setStatusAsync({
-        positionMillis: 0,
-        shouldPlay: false,
-      })
-      .catch(() => {
-        // ignore
+  const animateVideoPreviewClose = useCallback(
+    (direction = 1) => {
+      Animated.timing(videoSwipeX, {
+        toValue: direction * SCREEN_WIDTH,
+        duration: 160,
+        useNativeDriver: true,
+      }).start(() => {
+        closeVideoPreview();
       });
-  };
+    },
+    [videoSwipeX, closeVideoPreview]
+  );
 
   const videoPanResponder = useRef(
     PanResponder.create({
@@ -235,17 +245,7 @@ export default function MessageBubble({ item, isMine, isPlaying, onPlayAudio }) 
                 setVideoPreviewVisible(true);
               }}
             >
-              <Video
-                ref={inlineVideoRef}
-                source={{ uri: item.videoUri }}
-                style={styles.messageVideo}
-                resizeMode='cover'
-                shouldPlay={false}
-                isLooping={false}
-                onPlaybackStatusUpdate={status => {
-                  resetVideoToStartWhenFinished(status, inlineVideoRef);
-                }}
-              />
+              <InlineVideo videoUri={item.videoUri} style={styles.messageVideo} />
               <View style={styles.videoHintBadge}>
                 <Text style={styles.videoHintText}>全屏预览</Text>
               </View>
@@ -294,18 +294,7 @@ export default function MessageBubble({ item, isMine, isPlaying, onPlayAudio }) 
                     <View style={styles.videoPreviewBody}>
                       <TouchableWithoutFeedback onPress={() => {}}>
                         <View style={styles.previewVideoFrame}>
-                          <Video
-                            ref={previewVideoRef}
-                            source={{ uri: item.videoUri }}
-                            style={styles.previewVideo}
-                            useNativeControls
-                            resizeMode='contain'
-                            shouldPlay={false}
-                            isLooping={false}
-                            onPlaybackStatusUpdate={status => {
-                              resetVideoToStartWhenFinished(status, previewVideoRef);
-                            }}
-                          />
+                          <PreviewVideo videoUri={item.videoUri} style={styles.previewVideo} />
                         </View>
                       </TouchableWithoutFeedback>
                     </View>
