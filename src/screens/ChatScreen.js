@@ -13,7 +13,6 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { sendChatApi } from '../api/chatApi';
 import ChatInputBar from '../components/chat/ChatInputBar';
 import MessageBubble from '../components/chat/MessageBubble';
 import { useChat } from '../hooks/useChat';
@@ -121,23 +120,8 @@ export default function ChatScreen({ currentUser, onLogout }) {
     }
 
     try {
-      const params = {
-        type: 'text',
-        content: draft,
-        mediaUrl: '',
-        generateReply: true,
-      };
-
-      // 1) 本地先入列，保证用户消息立即可见
+      // 本地先入列并触发 outbox 发送，AI 回复由发送结果统一落库
       await sendText();
-
-      // 2) 触发服务端处理（回复展示统一以 ws/sync 进入 messages 为准）
-      const result = await sendChatApi(params);
-
-      if (result?.ok === false) {
-        Alert.alert('发送失败', result.message || '请稍后重试');
-        return;
-      }
     } catch (error) {
       Alert.alert('发送失败', error?.message ?? '请稍后重试');
     }

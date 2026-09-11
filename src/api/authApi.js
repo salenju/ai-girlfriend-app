@@ -7,7 +7,7 @@ export async function loginApi({ username, password }) {
   return requestJson({
     path: '/api/auth/login',
     method: 'POST',
-    body: { email: username, password },
+    body: { account: username, password },
   });
 }
 
@@ -19,10 +19,9 @@ export async function registerApi({ username, password }) {
   });
 }
 
-export async function logoutApi({ token }) {
+export async function getCurrentUserApi() {
   return requestJson({
-    path: '/api/auth/logout',
-    method: 'POST',
-    token,
+    path: '/api/auth/me',
+    method: 'GET',
   });
 }

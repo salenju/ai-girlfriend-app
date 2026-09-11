@@ -16,7 +16,7 @@ export default function AuthScreen({ onLogin, onRegister }) {
   const [form, setForm] = useState({ username: '', password: '' });
 
   const canSubmit = useMemo(() => {
-    return form.username.trim().length >= 2 && form.password.length >= 6;
+    return form.username.trim().length >= 3 && form.password.length >= 6;
   }, [form]);
 
   const onChange = (key, value) => {
@@ -46,7 +46,7 @@ export default function AuthScreen({ onLogin, onRegister }) {
           <TextInput
             value={form.username}
             onChangeText={v => onChange('username', v)}
-            placeholder='用户名（至少2位）'
+            placeholder='用户名（至少3位）'
             style={styles.input}
             autoCapitalize='none'
           />

@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { loginApi, logoutApi, registerApi } from '../api/authApi';
+import { useEffect, useState } from 'react';
+import { getCurrentUserApi, loginApi, registerApi } from '../api/authApi';
+import { clearStoredAuthToken, getStoredAuthToken } from '../api/client';
 
 function extractUser(payload, fallbackUsername = '') {
   const raw = payload?.user || payload?.data?.user || payload?.data || payload;
@@ -18,19 +19,41 @@ function extractUser(payload, fallbackUsername = '') {
   };
 }
 
-function extractToken(payload) {
-  return (
-    payload?.token ||
-    payload?.accessToken ||
-    payload?.data?.token ||
-    payload?.data?.accessToken ||
-    ''
-  );
-}
-
 export function useAuth() {
   const [currentUser, setCurrentUser] = useState(null);
   const [authToken, setAuthToken] = useState('');
+
+  // 冷启动时用已存 token 恢复会话
+  useEffect(() => {
+    let cancelled = false;
+
+    const restoreSession = async () => {
+      const token = await getStoredAuthToken();
+      if (!token) {
+        return;
+      }
+
+      const result = await getCurrentUserApi();
+      if (cancelled) {
+        return;
+      }
+
+      if (result.ok) {
+        setCurrentUser(extractUser(result.payload?.data?.user || result.payload?.data));
+        setAuthToken(token);
+      } else {
+        await clearStoredAuthToken();
+      }
+    };
+
+    restoreSession().catch(() => {
+      // 会话恢复失败时保持未登录态
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const register = async ({ username, password }) => {
     const safeUsername = String(username || '').trim();
@@ -39,8 +62,8 @@ export function useAuth() {
       return { ok: false, message: '请填写完整用户名和密码' };
     }
 
-    if (safeUsername.length < 2) {
-      return { ok: false, message: '用户名至少 2 位' };
+    if (safeUsername.length < 3) {
+      return { ok: false, message: '用户名至少 3 位' };
     }
 
     if (String(password).length < 6) {
@@ -119,9 +142,9 @@ export function useAuth() {
 
   const logout = async () => {
     try {
-      await logoutApi({ token: authToken });
+      await clearStoredAuthToken();
     } catch {
-      // 即使登出接口失败，也清理本地态
+      // 即使本地清理失败，也重置内存态
     } finally {
       setCurrentUser(null);
       setAuthToken('');

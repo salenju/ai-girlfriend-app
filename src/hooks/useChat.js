@@ -483,8 +483,35 @@ export function useChat(currentUser) {
       };
     }
 
-    // fallback for local dev without remote
-    return sendTaskMock(task);
+    // 媒体消息暂沿用本地 mock（媒体同步在后续阶段处理）
+    if (payload.type && payload.type !== 'text') {
+      return sendTaskMock(task);
+    }
+
+    // 文本消息走标准 REST 接口（失败会进入 outbox 重试）
+    const result = await sendChatApi({
+      type: 'text',
+      content: payload.text,
+      text: payload.text,
+      clientId: task.clientId,
+      senderId: payload.senderId,
+      createdAtClient: payload.createdAtClient,
+      generateReply: true,
+    });
+
+    if (!result?.ok) {
+      throw new Error(result?.message || '发送失败');
+    }
+
+    const data = result.payload?.data || {};
+
+    return {
+      serverId: data.serverId || data.userMessage?.serverId || data.userMessage?.id || null,
+      seq: Number.isFinite(Number(data.seq)) ? Number(data.seq) : null,
+      createdAtServer:
+        data.createdAtServer || data.userMessage?.createdAtServer || new Date().toISOString(),
+      assistantMessage: data.assistantMessage || null,
+    };
   };
 
   const flushOutboxOnce = async () => {
@@ -498,38 +525,44 @@ export function useChat(currentUser) {
         sendTask: sendTaskRemoteFirst,
         batchSize: 20,
         onProgress: async (result, task) => {
-          if (!result?.ok || !result?.result) return;
+          if (!result?.ok || !result.result) return;
 
           const ack = result.result;
           const seq = Number(ack.seq);
-          if (!Number.isFinite(seq)) return;
 
-          // 将 seq 写入本地（借助同 clientId 的 upsert），再标记 sent，保证后续按 seq 增量同步可用
-          await enqueueLocalMessage({
-            conversationId: task.conversationId,
-            senderId: task.payload?.senderId || currentUser?.id || BOT_USER.id,
-            text: task.payload?.text || '',
-            messageType: task.payload?.type || 'text',
-            previewText: null,
-            clientId: task.clientId,
-            createdAtClient: task.payload?.createdAtClient || new Date().toISOString(),
-            unreadDelta: 0,
-            meta: {
-              ...(task.payload?.meta || {}),
-              localOnly: false,
-              seq,
+          if (Number.isFinite(seq)) {
+            // 将 seq 写入本地（借助同 clientId 的 upsert），再标记 sent，保证后续按 seq 增量同步可用
+            await enqueueLocalMessage({
+              conversationId: task.conversationId,
+              senderId: task.payload?.senderId || currentUser?.id || BOT_USER.id,
+              text: task.payload?.text || '',
+              messageType: task.payload?.type || 'text',
+              previewText: null,
+              clientId: task.clientId,
+              createdAtClient: task.payload?.createdAtClient || new Date().toISOString(),
+              unreadDelta: 0,
+              meta: {
+                ...(task.payload?.meta || {}),
+                localOnly: false,
+                seq,
+                serverId: ack.serverId || null,
+              },
+            });
+
+            await markOutboxSent({
+              conversationId: task.conversationId,
+              clientId: task.clientId,
               serverId: ack.serverId || null,
-            },
-          });
+              createdAtServer: ack.createdAtServer || new Date().toISOString(),
+            });
 
-          await markOutboxSent({
-            conversationId: task.conversationId,
-            clientId: task.clientId,
-            serverId: ack.serverId || null,
-            createdAtServer: ack.createdAtServer || new Date().toISOString(),
-          });
+            lastSeqRef.current = Math.max(lastSeqRef.current, seq);
+          }
 
-          lastSeqRef.current = Math.max(lastSeqRef.current, seq);
+          // AI 回复直接落本地库，随后统一刷新消息列表
+          if (ack.assistantMessage) {
+            await persistRemoteMessage(ack.assistantMessage);
+          }
         },
       });
 

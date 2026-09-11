@@ -690,7 +690,7 @@ export async function flushOutboxQueue({
         result: sendResult ?? null,
       };
       results.push(success);
-      if (onProgress) onProgress(success, task);
+      if (onProgress) await onProgress(success, task);
     } catch (error) {
       const failureMessage = error?.message || String(error);
       await markOutboxFailed({
@@ -706,7 +706,7 @@ export async function flushOutboxQueue({
         error: failureMessage,
       };
       results.push(failure);
-      if (onProgress) onProgress(failure, task);
+      if (onProgress) await onProgress(failure, task);
     }
   }
 
