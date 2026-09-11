@@ -32,7 +32,7 @@ function shouldRenderOnRight(item, currentUser, config = MESSAGE_ALIGNMENT_CONFI
   return targetSide === 'right';
 }
 
-export default function ChatScreen({ currentUser, onLogout }) {
+export default function ChatScreen({ currentUser }) {
   const PageContainer = Platform.OS === 'ios' ? KeyboardAvoidingView : View;
   const pageContainerProps =
     Platform.OS === 'ios' ? { behavior: 'padding', keyboardVerticalOffset: 0 } : {};
@@ -44,13 +44,15 @@ export default function ChatScreen({ currentUser, onLogout }) {
     setInputText,
     isRecording,
     playingMessageId,
+    ttsLoadingId,
     sendText,
     pickImage,
     pickVideo,
     startRecording,
     stopRecording,
     togglePlayAudio,
-    cleanupMedia,
+    togglePlayText,
+    retryMessage,
   } = useChat(currentUser);
 
   useEffect(() => {
@@ -113,6 +115,17 @@ export default function ChatScreen({ currentUser, onLogout }) {
     }
   };
 
+  const handlePlayText = async (messageId, text) => {
+    try {
+      const result = await togglePlayText(messageId, text);
+      if (result?.ok === false) {
+        Alert.alert('提示', result.message || '语音播放失败');
+      }
+    } catch (error) {
+      Alert.alert('播放失败', error?.message ?? '语音播放失败');
+    }
+  };
+
   const handleSendText = async () => {
     const draft = inputText.trim();
     if (!draft) {
@@ -127,9 +140,12 @@ export default function ChatScreen({ currentUser, onLogout }) {
     }
   };
 
-  const handleLogout = async () => {
-    await cleanupMedia();
-    onLogout();
+  const handleRetry = async messageId => {
+    try {
+      await retryMessage(messageId);
+    } catch (error) {
+      Alert.alert('重试失败', error?.message ?? '请稍后重试');
+    }
   };
 
   return (
@@ -137,9 +153,6 @@ export default function ChatScreen({ currentUser, onLogout }) {
       <PageContainer style={styles.page} {...pageContainerProps}>
         <View style={styles.header}>
           <Text style={styles.headerTitle}>与小微聊天中</Text>
-          <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-            <Text style={styles.logoutText}>退出登录</Text>
-          </TouchableOpacity>
         </View>
 
         <FlatList
@@ -156,6 +169,9 @@ export default function ChatScreen({ currentUser, onLogout }) {
                 isMine={bubbleOnRight}
                 isPlaying={playingMessageId === item.id}
                 onPlayAudio={handlePlayAudio}
+                onPlayText={handlePlayText}
+                onRetry={handleRetry}
+                isTtsLoading={ttsLoadingId === item.id}
               />
             );
           }}

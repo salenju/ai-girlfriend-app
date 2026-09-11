@@ -338,12 +338,18 @@ export async function enqueueLocalMessage({
   maxRetries = RETRY_DEFAULTS.maxRetries,
   unreadDelta = 0,
   meta = {},
+  // 远端消息（如 AI 回复）直接落库为 sent，不进发送队列
+  enqueueOutbox = true,
+  serverId = null,
+  createdAtServer = null,
 }) {
   if (!conversationId) throw new Error('conversationId is required');
   if (!senderId) throw new Error('senderId is required');
   if (!text?.trim()) throw new Error('text is required');
 
   await initLocalChatStorage();
+
+  const nextStatus = enqueueOutbox ? MESSAGE_STATUS.PENDING : MESSAGE_STATUS.SENT;
 
   const payload = {
     type: messageType,
@@ -358,53 +364,61 @@ export async function enqueueLocalMessage({
   await runInTx(async db => {
     await db.runAsync(
       `INSERT INTO messages (
-        conversation_id, client_id, sender_id, type, text, status, created_at_client, meta_json
+        conversation_id, client_id, server_id, sender_id, type, text, status,
+        created_at_client, created_at_server, meta_json
       ) VALUES (
-        $conversationId, $clientId, $senderId, $type, $text, $status, $createdAtClient, $metaJson
+        $conversationId, $clientId, $serverId, $senderId, $type, $text, $status,
+        $createdAtClient, $createdAtServer, $metaJson
       )
       ON CONFLICT(conversation_id, client_id) DO UPDATE SET
         type = excluded.type,
         text = excluded.text,
         status = excluded.status,
+        server_id = COALESCE(excluded.server_id, messages.server_id),
+        created_at_server = COALESCE(excluded.created_at_server, messages.created_at_server),
         error_message = NULL,
         meta_json = excluded.meta_json`,
       {
         $conversationId: conversationId,
         $clientId: clientId,
+        $serverId: serverId,
         $senderId: senderId,
         $type: messageType,
         $text: payload.text,
-        $status: MESSAGE_STATUS.PENDING,
+        $status: nextStatus,
         $createdAtClient: createdAtClient,
-        $metaJson: JSON.stringify({ localOnly: true, ...meta }),
+        $createdAtServer: createdAtServer,
+        $metaJson: JSON.stringify({ localOnly: enqueueOutbox, ...meta }),
       }
     );
 
-    const now = nowIso();
-    await db.runAsync(
-      `INSERT INTO outbox_queue (
-        conversation_id, client_id, payload_json, status, retry_count, max_retries,
-        next_retry_at, created_at, updated_at
-      ) VALUES (
-        $conversationId, $clientId, $payloadJson, $status, 0, $maxRetries,
-        NULL, $now, $now
-      )
-      ON CONFLICT(conversation_id, client_id) DO UPDATE SET
-        payload_json = excluded.payload_json,
-        status = $pending,
-        updated_at = $now,
-        next_retry_at = NULL,
-        last_error = NULL`,
-      {
-        $conversationId: conversationId,
-        $clientId: clientId,
-        $payloadJson: JSON.stringify(payload),
-        $status: OUTBOX_STATUS.PENDING,
-        $pending: OUTBOX_STATUS.PENDING,
-        $maxRetries: Number(maxRetries || RETRY_DEFAULTS.maxRetries),
-        $now: now,
-      }
-    );
+    if (enqueueOutbox) {
+      const now = nowIso();
+      await db.runAsync(
+        `INSERT INTO outbox_queue (
+          conversation_id, client_id, payload_json, status, retry_count, max_retries,
+          next_retry_at, created_at, updated_at
+        ) VALUES (
+          $conversationId, $clientId, $payloadJson, $status, 0, $maxRetries,
+          NULL, $now, $now
+        )
+        ON CONFLICT(conversation_id, client_id) DO UPDATE SET
+          payload_json = excluded.payload_json,
+          status = $pending,
+          updated_at = $now,
+          next_retry_at = NULL,
+          last_error = NULL`,
+        {
+          $conversationId: conversationId,
+          $clientId: clientId,
+          $payloadJson: JSON.stringify(payload),
+          $status: OUTBOX_STATUS.PENDING,
+          $pending: OUTBOX_STATUS.PENDING,
+          $maxRetries: Number(maxRetries || RETRY_DEFAULTS.maxRetries),
+          $now: now,
+        }
+      );
+    }
 
     const summaryText =
       previewText ??
@@ -752,4 +766,58 @@ export async function resetChatStorageForDevOnly() {
   `);
   initialized = false;
   await initLocalChatStorage();
+}
+
+// 清空本地消息数据（保留表结构）
+export async function clearLocalChatData() {
+  await initLocalChatStorage();
+  const db = await getDb();
+  await db.execAsync(`
+    DELETE FROM outbox_queue;
+    DELETE FROM messages;
+    DELETE FROM conversations;
+  `);
+}
+
+// 失败重试：把指定消息的发送任务重新排队
+export async function requeueOutboxTask({ conversationId, clientId }) {
+  if (!conversationId || !clientId) {
+    throw new Error('conversationId and clientId are required');
+  }
+
+  await initLocalChatStorage();
+  const db = await getDb();
+  const now = nowIso();
+
+  await runInTx(async txDb => {
+    await txDb.runAsync(
+      `UPDATE outbox_queue
+       SET status = $pending,
+           next_retry_at = NULL,
+           locked_at = NULL,
+           last_error = NULL,
+           updated_at = $now
+       WHERE conversation_id = $conversationId
+         AND client_id = $clientId`,
+      {
+        $conversationId: conversationId,
+        $clientId: clientId,
+        $pending: OUTBOX_STATUS.PENDING,
+        $now: now,
+      }
+    );
+
+    await txDb.runAsync(
+      `UPDATE messages
+       SET status = $pending,
+           error_message = NULL
+       WHERE conversation_id = $conversationId
+         AND client_id = $clientId`,
+      {
+        $conversationId: conversationId,
+        $clientId: clientId,
+        $pending: MESSAGE_STATUS.PENDING,
+      }
+    );
+  });
 }

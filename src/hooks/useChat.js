@@ -1,13 +1,15 @@
 import { Audio } from 'expo-av';
 import * as ImagePicker from 'expo-image-picker';
 import { useEffect, useRef, useState } from 'react';
-import { sendChatApi, uploadImageApi } from '../api/chatApi';
+import { sendChatApi, synthesizeSpeechApi, uploadMediaApi } from '../api/chatApi';
+import { getStoredAuthToken } from '../api/client';
 import {
   enqueueLocalMessage,
   flushOutboxQueue,
   initLocalChatStorage,
   listMessagesByConversation,
   markOutboxSent,
+  requeueOutboxTask,
 } from '../services/chat/localChatStorage';
 
 export const BOT_USER = {
@@ -20,9 +22,34 @@ const MESSAGE_PAGE_SIZE = 200;
 const MEDIA_PAYLOAD_PREFIX = '__LOCAL_MEDIA__:';
 
 // Phase 2: realtime + seq incremental sync configs
-// 可通过全局变量注入：globalThis.__CHAT_WS_URL__ / globalThis.__CHAT_SYNC_HTTP_URL__
-const CHAT_WS_URL = globalThis.__CHAT_WS_URL__ || '';
-const CHAT_SYNC_HTTP_URL = globalThis.__CHAT_SYNC_HTTP_URL__ || '';
+// 优先级：显式环境变量 / 全局变量 > 由 API 地址自动推导
+const API_BASE_URL =
+  process.env.EXPO_PUBLIC_API_BASE_URL || globalThis.__API_BASE_URL__ || '';
+
+function toWebSocketUrl(base) {
+  const normalized = String(base || '').replace(/\/$/, '');
+  if (!normalized) return '';
+
+  if (normalized.startsWith('https://')) {
+    return `${normalized.replace('https://', 'wss://')}/chat/ws`;
+  }
+
+  if (normalized.startsWith('http://')) {
+    return `${normalized.replace('http://', 'ws://')}/chat/ws`;
+  }
+
+  return '';
+}
+
+const CHAT_SYNC_HTTP_URL =
+  process.env.EXPO_PUBLIC_CHAT_SYNC_HTTP_URL ||
+  globalThis.__CHAT_SYNC_HTTP_URL__ ||
+  (API_BASE_URL ? `${String(API_BASE_URL).replace(/\/$/, '')}/api/chat` : '');
+
+const CHAT_WS_URL =
+  process.env.EXPO_PUBLIC_CHAT_WS_URL ||
+  globalThis.__CHAT_WS_URL__ ||
+  toWebSocketUrl(API_BASE_URL);
 const SYNC_PULL_INTERVAL_MS = 12_000;
 const WS_RECONNECT_BASE_MS = 1200;
 const WS_RECONNECT_MAX_MS = 10_000;
@@ -150,23 +177,6 @@ function createBotWelcomeMessage(username) {
   };
 }
 
-async function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function sendTaskMock(task) {
-  await delay(150);
-  const text = task?.payload?.text || '';
-  if (typeof text === 'string' && text.includes('#fail')) {
-    throw new Error('模拟发送失败：命中 #fail 标记');
-  }
-
-  return {
-    serverId: `server-${task.clientId}`,
-    createdAtServer: new Date().toISOString(),
-  };
-}
-
 function normalizeRemoteMessage(msg) {
   if (!msg || typeof msg !== 'object') return null;
 
@@ -232,6 +242,16 @@ function parseSyncMessagesPayload(payload) {
   if (Array.isArray(payload.messages)) return payload.messages;
   if (Array.isArray(payload.items)) return payload.items;
   if (Array.isArray(payload.data)) return payload.data;
+
+  // 兼容 { data: { messages: [...] } } 等嵌套结构
+  const nested = payload.data || payload.result;
+  if (nested) {
+    if (Array.isArray(nested)) return nested;
+    if (Array.isArray(nested.messages)) return nested.messages;
+    if (Array.isArray(nested.items)) return nested.items;
+    if (Array.isArray(nested.data)) return nested.data;
+  }
+
   return [];
 }
 
@@ -241,8 +261,10 @@ export function useChat(currentUser) {
   const [recording, setRecording] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [playingMessageId, setPlayingMessageId] = useState(null);
+  const [ttsLoadingId, setTtsLoadingId] = useState(null);
 
   const soundRef = useRef(null);
+  const ttsUrlCacheRef = useRef(new Map());
   const flushTimerRef = useRef(null);
   const syncTimerRef = useRef(null);
   const reconnectTimerRef = useRef(null);
@@ -255,6 +277,7 @@ export function useChat(currentUser) {
   const wsRef = useRef(null);
   const wsReconnectAttemptRef = useRef(0);
   const isWsConnectedRef = useRef(false);
+  const wsTokenRef = useRef('');
   const pendingWsRequestsRef = useRef(new Map());
 
   const pushMessage = message => {
@@ -311,6 +334,10 @@ export function useChat(currentUser) {
       clientId: normalized.clientId,
       createdAtClient: normalized.createdAt,
       unreadDelta,
+      // 远端消息直接落库为 sent，避免生成多余的发送任务
+      enqueueOutbox: false,
+      serverId: normalized.serverId,
+      createdAtServer: normalized.createdAt,
       meta: {
         localOnly: false,
         remote: true,
@@ -319,6 +346,7 @@ export function useChat(currentUser) {
       },
     });
 
+    // 若存在同 clientId 的本地发送任务（如自己消息的回显），一并标记完成
     await markOutboxSent({
       conversationId,
       clientId: normalized.clientId,
@@ -432,14 +460,18 @@ export function useChat(currentUser) {
 
   const sendTaskRemoteFirst = async task => {
     const payload = task?.payload || {};
+    const messageType = payload.type || 'text';
+    const mediaUrl = payload.meta?.mediaUrl || '';
+    const textValue = messageType === 'text' ? payload.text : '';
 
     if (isWsConnectedRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
       const ack = await wsRequest({
         type: 'message:send',
         data: {
           clientId: task.clientId,
-          type: payload.type || 'text',
-          text: payload.text,
+          type: messageType,
+          text: textValue,
+          mediaUrl,
           senderId: payload.senderId,
           createdAtClient: payload.createdAtClient,
           meta: payload.meta || {},
@@ -450,21 +482,26 @@ export function useChat(currentUser) {
         serverId: ack.serverId || ack.id || null,
         seq: Number.isFinite(Number(ack.seq)) ? Number(ack.seq) : null,
         createdAtServer: ack.createdAtServer || ack.createdAt || new Date().toISOString(),
+        assistantMessage: ack.assistantMessage || null,
       };
     }
 
     if (CHAT_SYNC_HTTP_URL) {
+      const token = await getStoredAuthToken();
+
       const response = await fetch(`${CHAT_SYNC_HTTP_URL.replace(/\/$/, '')}/send`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           conversationId: task.conversationId,
           userId: currentUser?.id,
           clientId: task.clientId,
-          type: payload.type || 'text',
-          text: payload.text,
+          type: messageType,
+          text: textValue,
+          mediaUrl,
           senderId: payload.senderId,
           createdAtClient: payload.createdAtClient,
           meta: payload.meta || {},
@@ -475,24 +512,23 @@ export function useChat(currentUser) {
         throw new Error(`send failed: ${response.status}`);
       }
 
-      const ack = await response.json();
+      const json = await response.json();
+      const ack = json?.data || json || {};
+
       return {
         serverId: ack.serverId || ack.id || null,
         seq: Number.isFinite(Number(ack.seq)) ? Number(ack.seq) : null,
         createdAtServer: ack.createdAtServer || ack.createdAt || new Date().toISOString(),
+        assistantMessage: ack.assistantMessage || null,
       };
     }
 
-    // 媒体消息暂沿用本地 mock（媒体同步在后续阶段处理）
-    if (payload.type && payload.type !== 'text') {
-      return sendTaskMock(task);
-    }
-
-    // 文本消息走标准 REST 接口（失败会进入 outbox 重试）
+    // 兜底：走标准 REST 接口（失败会进入 outbox 重试）
     const result = await sendChatApi({
-      type: 'text',
-      content: payload.text,
-      text: payload.text,
+      type: messageType,
+      content: textValue,
+      text: textValue,
+      mediaUrl,
       clientId: task.clientId,
       senderId: payload.senderId,
       createdAtClient: payload.createdAtClient,
@@ -586,10 +622,13 @@ export function useChat(currentUser) {
         conversationIdRef.current
       )}&afterSeq=${encodeURIComponent(String(lastSeqRef.current || 0))}`;
 
+      const token = await getStoredAuthToken();
+
       const response = await fetch(url, {
         method: 'GET',
         headers: {
           Accept: 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
       });
 
@@ -664,7 +703,12 @@ export function useChat(currentUser) {
     closeSocket();
 
     try {
-      const ws = new WebSocket(CHAT_WS_URL);
+      const token = wsTokenRef.current;
+      const wsUrl = token
+        ? `${CHAT_WS_URL}${CHAT_WS_URL.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`
+        : CHAT_WS_URL;
+
+      const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -678,6 +722,7 @@ export function useChat(currentUser) {
               type: 'chat:join',
               conversationId: conversationIdRef.current,
               userId: currentUser.id,
+              token,
               afterSeq: lastSeqRef.current || 0,
             })
           );
@@ -738,7 +783,9 @@ export function useChat(currentUser) {
       await flushOutboxOnce();
       if (cancelled) return;
 
-      // 1) websocket realtime
+      // 1) websocket realtime（先取 token 用于连接鉴权）
+      wsTokenRef.current = await getStoredAuthToken();
+      if (cancelled) return;
       connectWebSocket();
 
       // 2) periodic outbox flush
@@ -783,6 +830,14 @@ export function useChat(currentUser) {
       }
 
       closeSocket();
+
+      if (soundRef.current) {
+        soundRef.current.unloadAsync().catch(() => {
+          // ignore unload errors
+        });
+        soundRef.current = null;
+      }
+      ttsUrlCacheRef.current.clear();
     };
   }, [currentUser?.id]);
 
@@ -812,6 +867,17 @@ export function useChat(currentUser) {
     }
   };
 
+  const retryMessage = async messageId => {
+    const conversationId = conversationIdRef.current;
+    if (!conversationId || !messageId) {
+      return;
+    }
+
+    await requeueOutboxTask({ conversationId, clientId: String(messageId) });
+    await syncMessagesFromStorage();
+    await flushOutboxOnce();
+  };
+
   const pickImage = async () => {
     if (!currentUser || !conversationIdRef.current) {
       return { ok: false, message: '请先登录' };
@@ -838,7 +904,7 @@ export function useChat(currentUser) {
     }
 
     try {
-      const remoteUrl = await uploadImageApi(asset.uri);
+      const remoteUrl = await uploadMediaApi(asset.uri, 'image');
 
       await enqueueLocalMessage({
         conversationId: conversationIdRef.current,
@@ -850,16 +916,11 @@ export function useChat(currentUser) {
         messageType: 'image',
         previewText: '[图片]',
         unreadDelta: 0,
+        meta: { mediaUrl: remoteUrl },
       });
 
       await syncMessagesFromStorage();
-
-      await sendChatApi({
-        type: 'image',
-        content: '',
-        mediaUrl: remoteUrl,
-        generateReply: true,
-      });
+      await flushOutboxOnce();
 
       return { ok: true };
     } catch (error) {
@@ -893,24 +954,30 @@ export function useChat(currentUser) {
     }
 
     try {
+      const remoteUrl = await uploadMediaApi(asset.uri, 'video');
+
       await enqueueLocalMessage({
         conversationId: conversationIdRef.current,
         senderId: currentUser.id,
         text: serializeMediaPayload({
           type: 'video',
-          videoUri: asset.uri,
+          videoUri: remoteUrl,
           durationMillis: Number(asset.duration || 0),
         }),
         messageType: 'video',
         previewText: '[视频]',
         unreadDelta: 0,
+        meta: {
+          mediaUrl: remoteUrl,
+          durationMillis: Number(asset.duration || 0),
+        },
       });
 
       await syncMessagesFromStorage();
       await flushOutboxOnce();
       return { ok: true };
-    } catch {
-      return { ok: false, message: '视频发送失败，请稍后重试' };
+    } catch (error) {
+      return { ok: false, message: error?.message || '视频发送失败，请稍后重试' };
     }
   };
 
@@ -955,25 +1022,29 @@ export function useChat(currentUser) {
 
     if (uri) {
       try {
+        const durationMillis = status?.durationMillis ?? 0;
+        const remoteUrl = await uploadMediaApi(uri, 'audio');
+
         await enqueueLocalMessage({
           conversationId: conversationIdRef.current,
           senderId: currentUser.id,
           text: serializeMediaPayload({
             type: 'audio',
-            audioUri: uri,
-            durationMillis: status.durationMillis ?? 0,
+            audioUri: remoteUrl,
+            durationMillis,
           }),
           messageType: 'audio',
           previewText: '[语音]',
           unreadDelta: 0,
+          meta: { mediaUrl: remoteUrl, durationMillis },
         });
 
         await syncMessagesFromStorage();
         await flushOutboxOnce();
-      } catch {
+      } catch (error) {
         setRecording(null);
         setIsRecording(false);
-        return { ok: false, message: '语音发送失败，请稍后重试' };
+        return { ok: false, message: error?.message || '语音发送失败，请稍后重试' };
       }
     }
 
@@ -994,6 +1065,64 @@ export function useChat(currentUser) {
     if (soundRef.current) {
       await soundRef.current.unloadAsync();
       soundRef.current = null;
+    }
+
+    const { sound } = await Audio.Sound.createAsync({ uri }, { shouldPlay: true });
+
+    sound.setOnPlaybackStatusUpdate(async playbackStatus => {
+      if (playbackStatus.didJustFinish) {
+        await sound.unloadAsync();
+        if (soundRef.current === sound) {
+          soundRef.current = null;
+        }
+        setPlayingMessageId(null);
+      }
+    });
+
+    soundRef.current = sound;
+    setPlayingMessageId(messageId);
+
+    return { ok: true };
+  };
+
+  // 播放 AI 文字消息的语音（按需合成并缓存）
+  const togglePlayText = async (messageId, text) => {
+    const content = String(text || '').trim();
+    if (!content) {
+      return { ok: false, message: '没有可播放的文本' };
+    }
+
+    if (playingMessageId === messageId && soundRef.current) {
+      await soundRef.current.stopAsync();
+      await soundRef.current.unloadAsync();
+      soundRef.current = null;
+      setPlayingMessageId(null);
+      return { ok: true };
+    }
+
+    if (soundRef.current) {
+      await soundRef.current.unloadAsync();
+      soundRef.current = null;
+      setPlayingMessageId(null);
+    }
+
+    let uri = ttsUrlCacheRef.current.get(messageId);
+
+    if (!uri) {
+      setTtsLoadingId(messageId);
+      try {
+        const result = await synthesizeSpeechApi(content);
+        if (!result.ok) {
+          return { ok: false, message: result.message };
+        }
+
+        uri = result.audioUrl;
+        ttsUrlCacheRef.current.set(messageId, uri);
+      } catch (error) {
+        return { ok: false, message: error?.message || '语音生成失败' };
+      } finally {
+        setTtsLoadingId(null);
+      }
     }
 
     const { sound } = await Audio.Sound.createAsync({ uri }, { shouldPlay: true });
@@ -1048,6 +1177,8 @@ export function useChat(currentUser) {
     }
 
     setPlayingMessageId(null);
+    setTtsLoadingId(null);
+    ttsUrlCacheRef.current.clear();
   };
 
   return {
@@ -1056,12 +1187,15 @@ export function useChat(currentUser) {
     setInputText,
     isRecording,
     playingMessageId,
+    ttsLoadingId,
     sendText,
+    retryMessage,
     pickImage,
     pickVideo,
     startRecording,
     stopRecording,
     togglePlayAudio,
+    togglePlayText,
     cleanupMedia,
     appendBotWelcome: username => {
       pushMessage(createBotWelcomeMessage(username));

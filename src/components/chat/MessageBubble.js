@@ -56,7 +56,15 @@ function PreviewVideo({ videoUri, style }) {
   return <VideoView player={player} style={style} contentFit='contain' nativeControls />;
 }
 
-export default function MessageBubble({ item, isMine, isPlaying, onPlayAudio }) {
+export default function MessageBubble({
+  item,
+  isMine,
+  isPlaying,
+  onPlayAudio,
+  onPlayText,
+  onRetry,
+  isTtsLoading,
+}) {
   const [previewVisible, setPreviewVisible] = useState(false);
   const [videoPreviewVisible, setVideoPreviewVisible] = useState(false);
   const [savingImage, setSavingImage] = useState(false);
@@ -193,7 +201,23 @@ export default function MessageBubble({ item, isMine, isPlaying, onPlayAudio }) 
           item.type === 'audio' && styles.audioOuterBubble,
         ]}
       >
-        {item.type === 'text' && <Text style={styles.messageText}>{item.text}</Text>}
+        {item.type === 'text' && (
+          <View>
+            <Text style={styles.messageText}>{item.text}</Text>
+
+            {!isMine && (
+              <TouchableOpacity
+                style={styles.ttsButton}
+                disabled={isTtsLoading}
+                onPress={() => onPlayText?.(item.id, item.text)}
+              >
+                <Text style={styles.ttsButtonText}>
+                  {isTtsLoading ? '生成中...' : isPlaying ? '停止' : '播放语音'}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
 
         {item.type === 'image' && (
           <>
@@ -360,6 +384,16 @@ export default function MessageBubble({ item, isMine, isPlaying, onPlayAudio }) 
             )}
           </TouchableOpacity>
         )}
+
+        {isMine && (item.status === 'pending' || item.status === 'sending') && (
+          <Text style={styles.statusText}>发送中...</Text>
+        )}
+
+        {isMine && item.status === 'failed' && (
+          <TouchableOpacity onPress={() => onRetry?.(item.id)}>
+            <Text style={styles.statusFailedText}>发送失败，点击重试</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
@@ -393,6 +427,30 @@ const styles = StyleSheet.create({
   messageText: {
     color: '#222',
     lineHeight: 20,
+  },
+  ttsButton: {
+    marginTop: 6,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    backgroundColor: '#eef1f5',
+  },
+  ttsButtonText: {
+    color: '#576b95',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  statusText: {
+    marginTop: 4,
+    fontSize: 11,
+    color: '#6b7a6f',
+  },
+  statusFailedText: {
+    marginTop: 4,
+    fontSize: 11,
+    color: '#c0392b',
+    fontWeight: '700',
   },
   messageImage: {
     width: 180,

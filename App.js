@@ -1,7 +1,7 @@
 import { Alert } from 'react-native';
 import { useAuth } from './src/hooks/useAuth';
 import AuthScreen from './src/screens/AuthScreen';
-import ChatScreen from './src/screens/ChatScreen';
+import MainScreen from './src/screens/MainScreen';
 
 export default function App() {
   const { currentUser, login, register, logout } = useAuth();
@@ -24,5 +24,5 @@ export default function App() {
     return <AuthScreen onLogin={handleLogin} onRegister={handleRegister} />;
   }
 
-  return <ChatScreen currentUser={currentUser} onLogout={logout} />;
+  return <MainScreen currentUser={currentUser} onLogout={logout} />;
 }
